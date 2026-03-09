@@ -13,5 +13,4 @@ export interface MarkerState {
   lat: number;
   lng: number;
   radiusKm: number;
-  focusTrigger?: number;
 }

@@ -199,53 +199,6 @@ export default function Sidebar({ members, setMembers, marker, setMarker, member
     }
   };
 
-  const [isEditingRadius, setIsEditingRadius] = useState(false);
-  const [tempRadius, setTempRadius] = useState("");
-  
-  const [searchCP, setSearchCP] = useState("");
-  const [searchCityOptions, setSearchCityOptions] = useState<string[]>([]);
-  const [isSearchingCity, setIsSearchingCity] = useState(false);
-
-  useEffect(() => {
-    if (searchCP.length === 5) {
-      setIsSearchingCity(true);
-      fetch(`https://geo.api.gouv.fr/communes?codePostal=${searchCP}&fields=nom&format=json`)
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) {
-            setSearchCityOptions(data.map((d: any) => d.nom));
-          }
-        })
-        .catch(() => setSearchCityOptions([]))
-        .finally(() => setIsSearchingCity(false));
-    } else {
-      setSearchCityOptions([]);
-    }
-  }, [searchCP]);
-
-  const handleCitySelect = async (city: string) => {
-    try {
-      const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(city)}&postcode=${encodeURIComponent(searchCP)}&limit=1`);
-      const data = await res.json();
-      if (data.features && data.features.length > 0) {
-        const [lng, lat] = data.features[0].geometry.coordinates;
-        setMarker({ ...marker, lat, lng, focusTrigger: Date.now() });
-        setSearchCP("");
-        setSearchCityOptions([]);
-      }
-    } catch (err) {
-      console.error("Failed to geocode city", err);
-    }
-  };
-
-  const handleRadiusSubmit = () => {
-    const val = parseInt(tempRadius);
-    if (!isNaN(val) && val > 0) {
-      setMarker({ ...marker, radiusKm: val, focusTrigger: Date.now() });
-    }
-    setIsEditingRadius(false);
-  };
-
   const groupedMembers = useMemo(() => {
     const groups = new Map<string, { cp: string; city: string; count: number }>();
     for (const m of membersInRadius) {
@@ -477,13 +430,13 @@ export default function Sidebar({ members, setMembers, marker, setMarker, member
           <p className="text-sm text-gray-500">Cartographie et analyse de densité</p>
         </div>
 
-        <div className="p-4 border-b border-gray-200 space-y-3">
+        <div className="p-6 border-b border-gray-200 space-y-4">
           <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
             <FileSpreadsheet className="w-4 h-4" />
             Importation
           </h2>
           
-          <div className="space-y-2">
+          <div className="space-y-3">
             <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -495,9 +448,9 @@ export default function Sidebar({ members, setMembers, marker, setMarker, member
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={importState.isAnalyzing}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-2 rounded-xl font-medium transition-colors disabled:opacity-50 text-sm"
+                className="w-full flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-3 rounded-xl font-medium transition-colors disabled:opacity-50"
               >
-                <Upload className="w-4 h-4" />
+                <Upload className="w-5 h-5" />
                 Importer CSV / Excel
               </button>
             </div>
@@ -523,20 +476,20 @@ export default function Sidebar({ members, setMembers, marker, setMarker, member
             )}
             
             {importState.results && (
-              <div className="bg-gray-50 rounded-xl p-3 space-y-2 border border-gray-100">
-                <h4 className="text-xs font-semibold text-gray-900 mb-2">Résultats de l'analyse</h4>
-                <div className="flex justify-between text-xs items-center">
+              <div className="bg-gray-50 rounded-xl p-4 space-y-2 border border-gray-100">
+                <h4 className="text-sm font-semibold text-gray-900 mb-3">Résultats de l'analyse</h4>
+                <div className="flex justify-between text-sm items-center">
                   <span className="text-emerald-700 font-medium">Membres listés</span>
                   <span className="bg-emerald-100 text-emerald-800 py-0.5 px-2 rounded-full font-bold">{importState.results.valid}</span>
                 </div>
-                <div className="flex justify-between text-xs items-center">
+                <div className="flex justify-between text-sm items-center">
                   <span className="text-red-700 font-medium">Non listés (invalides)</span>
                   <span className="bg-red-100 text-red-800 py-0.5 px-2 rounded-full font-bold">{importState.results.invalid}</span>
                 </div>
                 {importState.results.invalid > 0 && (
                   <button
                     onClick={startCorrection}
-                    className="mt-2 w-full flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-1.5 rounded-lg transition-colors"
+                    className="mt-2 w-full flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg transition-colors"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                     Corriger les invalides ({importState.results.invalid})
@@ -567,71 +520,23 @@ export default function Sidebar({ members, setMembers, marker, setMarker, member
           {marker.enabled && (
             <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
               <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700 flex justify-between items-center">
+                <label className="text-sm font-medium text-gray-700 flex justify-between">
                   <span>Rayon de recherche</span>
-                  {isEditingRadius ? (
-                    <input
-                      type="number"
-                      autoFocus
-                      className="w-16 text-right border border-indigo-300 rounded px-1 text-sm text-indigo-600 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      value={tempRadius}
-                      onChange={(e) => setTempRadius(e.target.value)}
-                      onBlur={handleRadiusSubmit}
-                      onKeyDown={(e) => e.key === 'Enter' && handleRadiusSubmit()}
-                    />
-                  ) : (
-                    <span 
-                      className="text-indigo-600 font-semibold cursor-pointer hover:underline"
-                      onDoubleClick={() => {
-                        setTempRadius(marker.radiusKm.toString());
-                        setIsEditingRadius(true);
-                      }}
-                    >
-                      {marker.radiusKm} km
-                    </span>
-                  )}
+                  <span className="text-indigo-600 font-semibold">{marker.radiusKm} km</span>
                 </label>
                 <input
                   type="range"
                   min="1"
                   max="500"
                   value={marker.radiusKm}
-                  onChange={(e) => {
-                    setMarker({ ...marker, radiusKm: parseInt(e.target.value) });
-                  }}
-                  onMouseUp={() => setMarker({ ...marker, focusTrigger: Date.now() })}
-                  onTouchEnd={() => setMarker({ ...marker, focusTrigger: Date.now() })}
+                  onChange={(e) => setMarker({ ...marker, radiusKm: parseInt(e.target.value) })}
                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                 />
               </div>
               
-              <div className="pt-3 border-t border-gray-100 space-y-2">
-                <label className="text-xs font-medium text-gray-700">Centrer sur une ville</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Code Postal"
-                    className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    value={searchCP}
-                    onChange={(e) => setSearchCP(e.target.value)}
-                    maxLength={5}
-                  />
-                </div>
-                {isSearchingCity && <p className="text-xs text-gray-500">Recherche...</p>}
-                {searchCityOptions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {searchCityOptions.map(city => (
-                      <button
-                        key={city}
-                        onClick={() => handleCitySelect(city)}
-                        className="px-2 py-1 text-xs font-medium bg-gray-100 hover:bg-indigo-100 text-gray-700 hover:text-indigo-700 rounded-md transition-colors"
-                      >
-                        {city}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <p className="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg border border-gray-100">
+                Déplacez le marqueur sur la carte pour ajuster la zone de recherche.
+              </p>
             </div>
           )}
         </div>

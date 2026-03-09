@@ -66,15 +66,6 @@ export default function Map({ members, marker, setMarker, setMembersInRadius }: 
     setMembersInRadius(inRadius);
   }, [members, marker.lat, marker.lng, marker.radiusKm, marker.enabled, setMembersInRadius]);
 
-  // Handle focus trigger
-  useEffect(() => {
-    if (map && marker.enabled && marker.focusTrigger) {
-      const center = L.latLng(marker.lat, marker.lng);
-      const circle = L.circle(center, { radius: marker.radiusKm * 1000 });
-      map.fitBounds(circle.getBounds(), { padding: [50, 50], maxZoom: 12 });
-    }
-  }, [map, marker.focusTrigger, marker.lat, marker.lng, marker.radiusKm, marker.enabled]);
-
   const createClusterCustomIcon = function (cluster: any) {
     const count = cluster.getChildCount();
     let size = 'Small';
