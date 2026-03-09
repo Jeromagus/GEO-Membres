@@ -1,0 +1,5 @@
+{
+  "name": "GEO Membres",
+  "description": "Application de cartographie des membres par code postal avec calcul de densité et de rayon.",
+  "requestFramePermissions": []
+}
