@@ -1,0 +1,45 @@
+# Stack « geo-membres » sur vm01. S'exécute depuis ~/stacks/geo-membres/ : le dépôt
+# est extrait dans ./app (skill VM-interne-tool), et ce fichier est copié à la racine
+# de la stack au déploiement.
+#
+# Un conteneur de fichiers statiques : ni clé, ni secret, ni volume de données.
+# La racine d'app.omonville.fgl reste au Catalogue (règle Host() nue).
+
+name: geo-membres
+
+services:
+  web:
+    build:
+      context: ./app
+    container_name: geo-membres
+    restart: unless-stopped
+    networks: [proxy]
+    security_opt: [no-new-privileges:true]
+
+    # Sans root, sans capacité, en lecture seule : nginx (uid 101) n'écrit que dans /tmp.
+    user: "101:101"
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+
+    mem_limit: 32m
+    # Aucun `ports:` publié : joignable uniquement par Traefik.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.services.geo-membres.loadbalancer.server.port=8080
+      # Priorité explicite au-dessus du Catalogue ; aucun recouvrement avec /plume-rouge*.
+      - traefik.http.routers.geo-membres.rule=Host(`app.omonville.fgl`) && PathPrefix(`/geo-membres`)
+      - traefik.http.routers.geo-membres.priority=120
+      - traefik.http.routers.geo-membres.entrypoints=websecure
+      - traefik.http.routers.geo-membres.tls=true
+      - traefik.http.routers.geo-membres.service=geo-membres
+      # Pas de StripPrefix : l'app est construite avec la base /geo-membres/.
+
+networks:
+  proxy: { external: true }

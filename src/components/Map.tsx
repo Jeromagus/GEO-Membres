@@ -99,8 +99,9 @@ export default function Map({ members, marker, setMarker, setMembersInRadius }: 
         ref={setMap}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://geoservices.ign.fr/">IGN</a> – Plan IGN'
+          url="https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+          maxZoom={19}
         />
         
         <MapEvents marker={marker} setMarker={setMarker} />
