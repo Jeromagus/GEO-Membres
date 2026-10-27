@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Circle, useMapEvents, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Circle, useMapEvents, Popup, Pane } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import { Member, MarkerState, Organism, OrganismRadiusState } from '../types';
@@ -24,6 +24,15 @@ const BASE_LAYERS = [
     attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
   },
   {
+    // Le Gris clair recoloré dans le navigateur par le filtre SVG #clair-colore (voir ClairColoreFilter)
+    id: 'clair-colore', label: 'Clair coloré',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
+    className: 'tiles-clair-colore',
+    // Noms de villes, régions, pays : quantité selon le zoom, non recolorés
+    labelsUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+  },
+  {
     id: 'photos', label: 'Photos aériennes',
     url: `${IGN_WMTS}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg`,
     attribution: `${IGN_ATTRIBUTION} – Photographies aériennes`, maxNativeZoom: 19,
@@ -39,6 +48,27 @@ const BASE_LAYERS = [
     attribution: `${OSM_ATTRIBUTION}, SRTM – style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)`, maxNativeZoom: 17,
   },
 ];
+
+// Recoloration du Gris clair par niveau de gris (51 paliers, 0 → 1), mesurés sur les tuiles :
+// mer ≈ 208, parcs ≈ 225, zones urbaines ≈ 232, terre ≈ 239, routes 255.
+// Seule la mer passe en bleu ; villes en crème soutenu, terre en crème, frontières en gris.
+const CLAIR_COLORE_R = '0.235 0.245 0.255 0.266 0.276 0.286 0.296 0.306 0.316 0.326 0.336 0.346 0.356 0.366 0.376 0.387 0.397 0.407 0.417 0.427 0.437 0.447 0.457 0.467 0.477 0.487 0.497 0.508 0.518 0.528 0.538 0.548 0.558 0.568 0.578 0.588 0.616 0.643 0.671 0.698 0.671 0.671 0.753 0.918 0.918 0.918 0.918 0.965 0.965 0.976 1.000';
+const CLAIR_COLORE_G = '0.251 0.261 0.270 0.280 0.290 0.299 0.309 0.318 0.328 0.338 0.347 0.357 0.367 0.376 0.386 0.396 0.405 0.415 0.424 0.434 0.444 0.453 0.463 0.473 0.482 0.492 0.502 0.511 0.521 0.530 0.540 0.550 0.559 0.569 0.579 0.588 0.620 0.651 0.682 0.714 0.820 0.820 0.846 0.898 0.898 0.898 0.898 0.953 0.953 0.969 1.000';
+const CLAIR_COLORE_B = '0.282 0.292 0.301 0.310 0.320 0.329 0.338 0.347 0.357 0.366 0.375 0.385 0.394 0.403 0.413 0.422 0.431 0.440 0.450 0.459 0.468 0.478 0.487 0.496 0.506 0.515 0.524 0.533 0.543 0.552 0.561 0.571 0.580 0.589 0.599 0.608 0.642 0.676 0.711 0.745 0.929 0.929 0.903 0.851 0.851 0.851 0.851 0.918 0.918 0.945 1.000';
+
+function ClairColoreFilter() {
+  return (
+    <svg width="0" height="0" className="absolute" aria-hidden="true">
+      <filter id="clair-colore" colorInterpolationFilters="sRGB">
+        <feComponentTransfer>
+          <feFuncR type="table" tableValues={CLAIR_COLORE_R} />
+          <feFuncG type="table" tableValues={CLAIR_COLORE_G} />
+          <feFuncB type="table" tableValues={CLAIR_COLORE_B} />
+        </feComponentTransfer>
+      </filter>
+    </svg>
+  );
+}
 
 const ADMIN_LIMITS_URL = `${IGN_WMTS}&LAYER=LIMITES_ADMINISTRATIVES_EXPRESS.LATEST&STYLE=normal&FORMAT=image/png`;
 
@@ -82,13 +112,20 @@ const memberIcon = L.divIcon({
   popupAnchor: L.point(0, -16),
 });
 
-// Organisme seul : carré émeraude, distinct des épingles des membres
+// Organismes : couche sous celle des membres (markerPane = 600), ronds des membres au-dessus
+const ORGANISM_PANE = 'organismes';
+
+// Organisme seul : carré émeraude de 44 px. Sous un rond de membres (32 à 48 px, même centre),
+// ses coins dépassent toujours (demi-diagonale 31 px), ce qui signale l'organisme.
+const ORGANISM_SQUARE = 'w-11 h-11 rounded-md shadow-lg border-2 border-white flex items-center justify-center text-white';
 const organismIcon = L.divIcon({
-  html: `<div class="w-6 h-6 rounded-md bg-emerald-600 border-2 border-white shadow-lg ring-2 ring-emerald-700/40"></div>`,
+  html: `<div class="${ORGANISM_SQUARE} bg-emerald-600">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>
+        </div>`,
   className: 'organism-marker',
-  iconSize: L.point(24, 24),
-  iconAnchor: L.point(12, 12),
-  popupAnchor: L.point(0, -12),
+  iconSize: L.point(44, 44),
+  iconAnchor: L.point(22, 22),
+  popupAnchor: L.point(0, -22),
 });
 
 interface MapProps {
@@ -170,40 +207,43 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
       colorClass = 'bg-fuchsia-700/80 text-white';
     }
 
+    // Rond centré dans l'icône, pour tomber pile sur le carré d'un organisme au même lieu
     return L.divIcon({
-      html: `<div class="flex items-center justify-center rounded-full shadow-lg border-2 border-white/50 ${size} ${colorClass}">
-              <span>${count}</span>
+      html: `<div class="w-full h-full flex items-center justify-center">
+              <div class="flex items-center justify-center rounded-full shadow-lg border-2 border-white/50 ${size} ${colorClass}">
+                <span>${count}</span>
+              </div>
             </div>`,
       className: 'custom-marker-cluster',
-      iconSize: L.point(40, 40, true),
+      iconSize: L.point(48, 48, true),
     });
   };
 
   // Dégradé émeraude pour les organismes (le violet reste aux membres)
+  // Même carré de 44 px que l'organisme seul, avec le nombre dans un coin visible sous les membres
   const createOrganismClusterIcon = function (cluster: any) {
     const count = cluster.getChildCount();
-    let size = 'w-8 h-8 text-xs';
-    let colorClass = 'bg-emerald-500/90 text-white';
+    let colorClass = 'bg-emerald-500';
 
     if (count >= 100) {
-      size = 'w-12 h-12 text-base font-bold';
-      colorClass = 'bg-emerald-900/90 text-white';
+      colorClass = 'bg-emerald-900';
     } else if (count >= 10) {
-      size = 'w-10 h-10 text-sm';
-      colorClass = 'bg-emerald-700/90 text-white';
+      colorClass = 'bg-emerald-700';
     }
 
     return L.divIcon({
-      html: `<div class="flex items-center justify-center rounded-lg shadow-lg border-2 border-white/70 ${size} ${colorClass}">
+      html: `<div class="relative ${ORGANISM_SQUARE} ${colorClass} text-sm font-bold">
               <span>${count}</span>
             </div>`,
       className: 'custom-marker-cluster',
-      iconSize: L.point(40, 40, true),
+      iconSize: L.point(44, 44),
+      iconAnchor: L.point(22, 22),
     });
   };
 
   return (
     <div className="w-full h-full relative">
+      <ClairColoreFilter />
       <MapContainer
         center={[46.603354, 1.888334]}
         zoom={6}
@@ -217,6 +257,7 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
           url={baseLayer.url}
           maxNativeZoom={baseLayer.maxNativeZoom}
           maxZoom={19}
+          className={baseLayer.className}
         />
         {showAdminLimits && (
           <TileLayer
@@ -224,6 +265,15 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
             url={ADMIN_LIMITS_URL}
             maxZoom={19}
             zIndex={2}
+          />
+        )}
+        {baseLayer.labelsUrl && (
+          <TileLayer
+            key={`${baseLayer.id}-noms`}
+            url={baseLayer.labelsUrl}
+            maxNativeZoom={baseLayer.maxNativeZoom}
+            maxZoom={19}
+            zIndex={3}
           />
         )}
         
@@ -275,9 +325,11 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
           ))}
         </MarkerClusterGroup>
 
+        <Pane name={ORGANISM_PANE} style={{ zIndex: 590 }} />
         <MarkerClusterGroup
           iconCreateFunction={createOrganismClusterIcon}
           maxClusterRadius={30}
+          clusterPane={ORGANISM_PANE}
         >
           {organisms.map((org) => (
             org.lat && org.lng ? (
@@ -285,8 +337,7 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
                 key={org.id}
                 position={[org.lat, org.lng]}
                 icon={organismIcon}
-                // Au-dessus des épingles et groupes de membres
-                zIndexOffset={10000}
+                pane={ORGANISM_PANE}
               >
                 <Popup>
                   <div className="text-sm min-w-[170px]">
@@ -411,14 +462,14 @@ function Legend({ members, organisms, orgRadius }: { members: Member[]; organism
         </div>
       )}
       {organisms.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="flex gap-0.5">
             <span className="w-3 h-3 rounded-sm bg-emerald-500" />
             <span className="w-3 h-3 rounded-sm bg-emerald-700" />
             <span className="w-3 h-3 rounded-sm bg-emerald-900" />
           </span>
-          Organismes ({organisms.length})
-          {orgRadius.enabled && <span className="text-gray-500">· rayon {orgRadius.radiusKm} km</span>}
+          <span className="whitespace-nowrap">Organismes ({organisms.length})</span>
+          {orgRadius.enabled && <span className="text-gray-500 whitespace-nowrap">· rayon {orgRadius.radiusKm} km</span>}
         </div>
       )}
     </div>

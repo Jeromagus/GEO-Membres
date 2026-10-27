@@ -10,6 +10,11 @@
   }
 }
 
+/* Fond « Clair coloré » : Gris clair Esri recoloré (filtre SVG dans Map.tsx) */
+.tiles-clair-colore {
+  filter: url(#clair-colore);
+}
+
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     width: 4px;
