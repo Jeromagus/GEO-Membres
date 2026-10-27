@@ -39,6 +39,10 @@ const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; cpColu
   organisms: { label: 'Importer Organismes', columns: 'TYPE,NOM,CP,VILLE,PAYS', cpColumn: 2, entity: 'organismes' },
 };
 
+// Bornes du rayon d'attractivité (km), communes au curseur et au champ de saisie
+const ORG_RADIUS_MIN = 1;
+const ORG_RADIUS_MAX = 200;
+
 function toMember(g: GeocodeResult, id: string): Member {
   return { id, originalIndex: g.index, postalCode: g.postalCode, city: g.city, country: g.country, lat: g.lat, lng: g.lng };
 }
@@ -270,6 +274,35 @@ export default function Sidebar({
       (organismStats.counts.get(b.id) || 0) - (organismStats.counts.get(a.id) || 0)
     );
   }, [organisms, organismStats]);
+
+  // Saisie libre du rayon : le brouillon peut être vide ou hors bornes pendant la frappe,
+  // seule une valeur entière valide est appliquée ; il est recalé à la sortie du champ.
+  const [radiusDraft, setRadiusDraft] = useState(String(orgRadius.radiusKm));
+
+  useEffect(() => {
+    setRadiusDraft(String(orgRadius.radiusKm));
+  }, [orgRadius.radiusKm]);
+
+  const handleRadiusDraft = (value: string) => {
+    setRadiusDraft(value);
+    const km = Number(value);
+    if (Number.isInteger(km) && km >= ORG_RADIUS_MIN && km <= ORG_RADIUS_MAX) {
+      setOrgRadius({ ...orgRadius, radiusKm: km });
+    }
+  };
+
+  const commitRadiusDraft = () => {
+    const km = Math.round(Number(radiusDraft));
+    if (!Number.isFinite(km) || radiusDraft.trim() === '') {
+      setRadiusDraft(String(orgRadius.radiusKm));
+      return;
+    }
+    const clamped = Math.min(ORG_RADIUS_MAX, Math.max(ORG_RADIUS_MIN, km));
+    setRadiusDraft(String(clamped));
+    if (clamped !== orgRadius.radiusKm) {
+      setOrgRadius({ ...orgRadius, radiusKm: clamped });
+    }
+  };
 
   const handleFileSelect = (kind: ImportKind) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -571,14 +604,29 @@ export default function Sidebar({
             {orgRadius.enabled && (
               <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700 flex justify-between">
-                    <span>Rayon d'attractivité</span>
-                    <span className="text-emerald-600 font-semibold">{orgRadius.radiusKm} km</span>
-                  </label>
+                  <div className="text-sm font-medium text-gray-700 flex justify-between items-center">
+                    <label htmlFor="org-radius-km">Rayon d'attractivité</label>
+                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                      <input
+                        id="org-radius-km"
+                        type="number"
+                        min={ORG_RADIUS_MIN}
+                        max={ORG_RADIUS_MAX}
+                        step={1}
+                        inputMode="numeric"
+                        value={radiusDraft}
+                        onChange={(e) => handleRadiusDraft(e.target.value)}
+                        onBlur={commitRadiusDraft}
+                        onKeyDown={(e) => { if (e.key === 'Enter') commitRadiusDraft(); }}
+                        className="w-16 border border-gray-300 rounded-md px-2 py-0.5 text-right text-emerald-700 font-semibold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                      />
+                      km
+                    </span>
+                  </div>
                   <input
                     type="range"
-                    min="1"
-                    max="150"
+                    min={ORG_RADIUS_MIN}
+                    max={ORG_RADIUS_MAX}
                     value={orgRadius.radiusKm}
                     onChange={(e) => setOrgRadius({ ...orgRadius, radiusKm: parseInt(e.target.value) })}
                     className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
