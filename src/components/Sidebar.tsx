@@ -23,6 +23,13 @@ interface SidebarProps {
   marker: MarkerState;
   setMarker: (marker: MarkerState) => void;
   membersInRadius: Member[];
+  organismsInRadius: OrganismInRadius[];
+}
+
+export interface OrganismInRadius {
+  organism: Organism;
+  // Distance au repère
+  distanceKm: number;
 }
 
 type ImportKind = 'members' | 'organisms';
@@ -153,7 +160,7 @@ function ResolutionModal({
 
 export default function Sidebar({
   members, setMembers, organisms, setOrganisms, orgRadius, setOrgRadius, organismStats,
-  marker, setMarker, membersInRadius
+  marker, setMarker, membersInRadius, organismsInRadius
 }: SidebarProps) {
   const fileInputRefs = {
     members: useRef<HTMLInputElement>(null),
@@ -708,7 +715,46 @@ export default function Sidebar({
         </div>
 
         {marker.enabled && (
-          <div className="p-6 bg-indigo-50/50 flex-1">
+          <div className="p-6 bg-indigo-50/50 flex-1 space-y-4">
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-emerald-100">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
+                  <Building2 className="w-4 h-4 text-emerald-600" />
+                </div>
+                <h3 className="text-sm font-medium text-gray-700">Organismes dans la zone</h3>
+              </div>
+              <div className="mt-4 flex items-baseline gap-2">
+                <span className="text-4xl font-black text-emerald-600">{organismsInRadius.length}</span>
+                <span className="text-sm font-medium text-gray-500">
+                  / {organisms.length}
+                </span>
+              </div>
+
+              {organismsInRadius.length > 0 && (
+                <div className="mt-5 pt-4 border-t border-emerald-50">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                    Distance au repère
+                  </h4>
+                  <div className="max-h-[25vh] overflow-y-auto pr-2 space-y-2 custom-scrollbar">
+                    {organismsInRadius.map(({ organism, distanceKm }) => (
+                      <div key={organism.id} className="flex items-center justify-between text-sm bg-gray-50 p-2 rounded-lg border border-gray-100">
+                        <div className="flex flex-col overflow-hidden pr-2">
+                          <span className="font-medium text-gray-900 truncate">{organism.name || 'Sans nom'}</span>
+                          <span className="text-xs text-gray-500 truncate">
+                            {organism.type && <span className="text-emerald-700 font-medium">{organism.type} · </span>}
+                            {organism.postalCode} {organism.city}
+                          </span>
+                        </div>
+                        <span className="bg-emerald-100 text-emerald-700 py-1 px-2.5 rounded-md font-bold text-xs shrink-0">
+                          {Math.round(distanceKm)} km
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-indigo-100">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
