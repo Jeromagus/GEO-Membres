@@ -50,7 +50,7 @@ const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; cpColu
 const ORG_RADIUS_MIN = 1;
 const ORG_RADIUS_MAX = 200;
 const MARKER_RADIUS_MIN = 1;
-const MARKER_RADIUS_MAX = 500;
+const MARKER_RADIUS_MAX = 200;
 
 function toMember(g: GeocodeResult, id: string): Member {
   return { id, originalIndex: g.index, postalCode: g.postalCode, city: g.city, country: g.country, lat: g.lat, lng: g.lng };

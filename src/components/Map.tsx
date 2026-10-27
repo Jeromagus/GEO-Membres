@@ -90,10 +90,10 @@ const customMarkerIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
-// Ronds : bleu-violet pour les membres seuls, orange (couleur opposée) dès qu'un organisme est au même lieu.
+// Ronds : dégradé de bleu pour les membres seuls, dégradé d'orange (couleur opposée) dès qu'un organisme est au même lieu.
 // Paliers de taille et de teinte selon le nombre de membres.
-const MEMBER_COLORS = ['bg-indigo-500/80', 'bg-purple-600/80', 'bg-fuchsia-700/80'];
-const ORGANISM_COLORS = ['bg-amber-500/90', 'bg-orange-600/90', 'bg-red-700/90'];
+const MEMBER_COLORS = ['bg-blue-500/85', 'bg-blue-700/85', 'bg-blue-900/85'];
+const ORGANISM_COLORS = ['bg-orange-400/90', 'bg-orange-600/90', 'bg-orange-800/90'];
 const SIZES = ['w-8 h-8 text-xs', 'w-10 h-10 text-sm', 'w-12 h-12 text-base font-bold'];
 
 const BUILDING_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>';
@@ -444,9 +444,9 @@ function Legend({ members, organisms, orgRadius }: { members: Member[]; organism
       {members.length > 0 && (
         <div className="flex items-center gap-2">
           <span className="flex gap-0.5">
-            <span className="w-3 h-3 rounded-full bg-indigo-500" />
-            <span className="w-3 h-3 rounded-full bg-purple-600" />
-            <span className="w-3 h-3 rounded-full bg-fuchsia-700" />
+            <span className="w-3 h-3 rounded-full bg-blue-500" />
+            <span className="w-3 h-3 rounded-full bg-blue-700" />
+            <span className="w-3 h-3 rounded-full bg-blue-900" />
           </span>
           Membres ({members.length})
         </div>
@@ -454,9 +454,9 @@ function Legend({ members, organisms, orgRadius }: { members: Member[]; organism
       {organisms.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="flex gap-0.5">
-            <span className="w-3 h-3 rounded-full bg-amber-500" />
+            <span className="w-3 h-3 rounded-full bg-orange-400" />
             <span className="w-3 h-3 rounded-full bg-orange-600" />
-            <span className="w-3 h-3 rounded-full bg-red-700" />
+            <span className="w-3 h-3 rounded-full bg-orange-800" />
           </span>
           <span className="whitespace-nowrap">Avec organisme ({organisms.length})</span>
           {orgRadius.enabled && <span className="text-gray-500 whitespace-nowrap">· rayon {orgRadius.radiusKm} km</span>}
