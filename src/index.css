@@ -15,6 +15,16 @@
   filter: url(#clair-colore);
 }
 
+/* Noms de villes (CityLabels.tsx) : texte sombre détouré de blanc */
+.city-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  color: #1f2937;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
+}
+
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
     width: 4px;

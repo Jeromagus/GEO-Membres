@@ -1,5 +1,5 @@
 import React, { useRef, useState, useMemo, useEffect } from 'react';
-import { Upload, MapPin, Settings2, Users, FileSpreadsheet, AlertCircle, Edit3, Building2 } from 'lucide-react';
+import { Upload, MapPin, Settings2, Users, FileSpreadsheet, AlertCircle, Edit3, Building2, ChevronDown, ChevronRight } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { Member, MarkerState, Organism, OrganismRadiusState } from '../types';
@@ -156,6 +156,106 @@ function ResolutionModal({
       </div>
     </div>
   );
+}
+
+type Accent = 'indigo' | 'orange';
+
+// Classes complètes (Tailwind ne génère que les noms écrits en entier)
+const ACCENT = {
+  indigo: {
+    switchOn: 'peer-checked:bg-indigo-600 peer-focus:ring-indigo-300',
+    tile: 'border-indigo-100', icon: 'bg-indigo-100 text-indigo-600', value: 'text-indigo-600', bar: 'bg-indigo-600',
+    tab: 'border-indigo-600 text-indigo-700', badge: 'bg-indigo-100 text-indigo-700',
+  },
+  orange: {
+    switchOn: 'peer-checked:bg-orange-600 peer-focus:ring-orange-300',
+    tile: 'border-orange-100', icon: 'bg-orange-100 text-orange-600', value: 'text-orange-600', bar: 'bg-orange-500',
+    tab: 'border-orange-500 text-orange-700', badge: 'bg-orange-100 text-orange-700',
+  },
+};
+
+// Section repliable : le titre replie, l'interrupteur éventuel reste accessible à droite
+function Section({ icon, title, summary, open, onToggle, action, children }: {
+  icon: React.ReactNode; title: string; summary?: string; open: boolean; onToggle: () => void;
+  action?: React.ReactNode; children: React.ReactNode;
+}) {
+  return (
+    <div className="border-b border-gray-200 shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <button onClick={onToggle} className="flex-1 min-w-0 flex items-center gap-2 text-left" aria-expanded={open}>
+          {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+          <span className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2 shrink-0">
+            {icon}
+            {title}
+          </span>
+          {summary && <span className="text-xs text-gray-500 truncate">{summary}</span>}
+        </button>
+        {action}
+      </div>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
+  );
+}
+
+function Switch({ checked, onChange, color, title }: { checked: boolean; onChange: (checked: boolean) => void; color: Accent; title: string }) {
+  return (
+    <label className="relative inline-flex items-center cursor-pointer shrink-0" title={title}>
+      <input type="checkbox" className="sr-only peer" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <div className={`w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all ${ACCENT[color].switchOn}`}></div>
+    </label>
+  );
+}
+
+function StatTile({ icon, label, value, total, color }: { icon: React.ReactNode; label: string; value: number; total: number; color: Accent }) {
+  const accent = ACCENT[color];
+  return (
+    <div className={`bg-white rounded-xl p-3 shadow-sm border ${accent.tile}`}>
+      <div className="flex items-center gap-1.5 text-xs font-medium text-gray-600">
+        <span className={`w-6 h-6 rounded-full flex items-center justify-center ${accent.icon}`}>{icon}</span>
+        {label}
+      </div>
+      <div className="mt-1.5 flex items-baseline gap-1">
+        <span className={`text-2xl font-black ${accent.value}`}>{value}</span>
+        <span className="text-xs font-medium text-gray-500">/ {total}</span>
+      </div>
+      {total > 0 && (
+        <div className="mt-1.5 w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+          <div className={`${accent.bar} h-1.5 rounded-full transition-all duration-500`} style={{ width: `${Math.min(100, (value / total) * 100)}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResultTab({ active, onClick, color, children }: { active: boolean; onClick: () => void; color: Accent; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 py-2 border-b-2 -mb-px transition-colors ${active ? ACCENT[color].tab : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ListRow({ title, subtitle, badge, badgeTitle, color }: {
+  title: string; subtitle: React.ReactNode; badge?: string; badgeTitle?: string; color: Accent;
+}) {
+  return (
+    <div className="flex items-center justify-between text-sm bg-gray-50 px-2 py-1.5 rounded-lg border border-gray-100">
+      <div className="flex flex-col overflow-hidden pr-2 min-w-0">
+        <span className="font-medium text-gray-900 truncate">{title}</span>
+        <span className="text-xs text-gray-500 truncate">{subtitle}</span>
+      </div>
+      {badge !== undefined && (
+        <span className={`py-0.5 px-2 rounded-md font-bold text-xs shrink-0 ${ACCENT[color].badge}`} title={badgeTitle}>{badge}</span>
+      )}
+    </div>
+  );
+}
+
+function EmptyList({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs text-gray-400 text-center py-6">{children}</p>;
 }
 
 export default function Sidebar({
@@ -493,31 +593,57 @@ export default function Sidebar({
     }
   };
 
+  // Sections repliables et onglet des résultats du repère
+  const [openSections, setOpenSections] = useState({ import: true, organisms: true, marker: true });
+  const toggleSection = (key: keyof typeof openSections) => setOpenSections(s => ({ ...s, [key]: !s[key] }));
+  const [showOrganismList, setShowOrganismList] = useState(true);
+  const [resultTab, setResultTab] = useState<'villes' | 'organismes'>('villes');
+
+
+  // Une fois un fichier importé, sa zone se réduit à une ligne (toujours cliquable et déposable pour remplacer)
   const renderImportZone = (kind: ImportKind) => {
     const config = IMPORT_CONFIG[kind];
     const results = importState.results[kind];
     const isMembers = kind === 'members';
     const isDragging = draggingKind === kind;
+    const zoneColors = isMembers
+      ? (isDragging ? 'border-indigo-500 bg-indigo-100' : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100')
+      : (isDragging ? 'border-orange-500 bg-orange-100' : 'border-orange-200 bg-orange-50 hover:bg-orange-100');
+    const textColor = isMembers ? 'text-indigo-700' : 'text-orange-700';
+    const Icon = isMembers ? Upload : Building2;
 
     return (
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <div
           onDragOver={handleDragOver(kind)}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop(kind)}
           onClick={() => !importState.isAnalyzing && fileInputRefs[kind].current?.click()}
-          className={`cursor-pointer border-2 border-dashed rounded-xl p-3 text-center transition-colors ${
-            isMembers
-              ? (isDragging ? 'border-indigo-500 bg-indigo-100' : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100')
-              : (isDragging ? 'border-emerald-500 bg-emerald-100' : 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100')
+          title={`Colonne : ${config.columns}`}
+          className={`cursor-pointer border-2 border-dashed rounded-xl transition-colors ${zoneColors} ${
+            results ? 'px-3 py-2' : 'p-3 text-center'
           } ${importState.isAnalyzing ? 'opacity-50 pointer-events-none' : ''}`}
         >
-          <div className={`flex items-center justify-center gap-2 font-medium ${isMembers ? 'text-indigo-700' : 'text-emerald-700'}`}>
-            {isMembers ? <Upload className="w-5 h-5" /> : <Building2 className="w-5 h-5" />}
-            {config.label}
-          </div>
-          <p className="mt-1 text-xs text-gray-500">Colonne : {config.columns}</p>
-          <p className="text-[11px] text-gray-400">Cliquez ou déposez un fichier .csv / .xlsx</p>
+          {results ? (
+            <div className="flex items-center gap-2 text-sm">
+              <Icon className={`w-4 h-4 shrink-0 ${textColor}`} />
+              <span className={`font-medium ${textColor}`}>{isMembers ? 'Membres' : 'Organismes'}</span>
+              <span className="bg-emerald-100 text-emerald-800 py-0.5 px-2 rounded-full font-bold text-xs" title="Listés">{results.valid}</span>
+              {results.invalid > 0 && (
+                <span className="bg-red-100 text-red-800 py-0.5 px-2 rounded-full font-bold text-xs" title="Non listés (invalides)">{results.invalid} invalides</span>
+              )}
+              <span className="ml-auto text-xs text-gray-500 underline decoration-dotted">Remplacer</span>
+            </div>
+          ) : (
+            <>
+              <div className={`flex items-center justify-center gap-2 font-medium ${textColor}`}>
+                <Icon className="w-5 h-5" />
+                {config.label}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">Colonne : {config.columns}</p>
+              <p className="text-[11px] text-gray-400">Cliquez ou déposez un fichier .csv / .xlsx</p>
+            </>
+          )}
         </div>
         <input
           type="file"
@@ -527,51 +653,45 @@ export default function Sidebar({
           className="hidden"
         />
 
-        {results && (
-          <div className="bg-gray-50 rounded-xl p-3 space-y-2 border border-gray-100">
-            <div className="flex justify-between text-sm items-center">
-              <span className="text-emerald-700 font-medium">{isMembers ? 'Membres listés' : 'Organismes listés'}</span>
-              <span className="bg-emerald-100 text-emerald-800 py-0.5 px-2 rounded-full font-bold">{results.valid}</span>
-            </div>
-            <div className="flex justify-between text-sm items-center">
-              <span className="text-red-700 font-medium">Non listés (invalides)</span>
-              <span className="bg-red-100 text-red-800 py-0.5 px-2 rounded-full font-bold">{results.invalid}</span>
-            </div>
-            {results.invalid > 0 && (
-              <button
-                onClick={() => startCorrection(kind)}
-                className="mt-1 w-full flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg transition-colors"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                Corriger les invalides ({results.invalid})
-              </button>
-            )}
-          </div>
+        {results && results.invalid > 0 && (
+          <button
+            onClick={() => startCorrection(kind)}
+            className="w-full flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-1.5 rounded-lg transition-colors"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            Corriger les invalides ({results.invalid})
+          </button>
         )}
       </div>
     );
   };
 
+  const importSummary = [
+    members.length > 0 && `${members.length} membres`,
+    organisms.length > 0 && `${organisms.length} organismes`,
+  ].filter(Boolean).join(' · ');
+
   return (
     <>
-      <div className="w-full h-full bg-white border-r border-gray-200 flex flex-col overflow-y-auto">
-        <div className="p-6 border-b border-gray-200">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
-              <MapPin className="w-6 h-6 text-white" />
-            </div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">GEO Membres</h1>
+      <div className="w-full h-full bg-white border-r border-gray-200 flex flex-col overflow-y-auto custom-scrollbar">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 shrink-0">
+          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-sm shrink-0">
+            <MapPin className="w-5 h-5 text-white" />
           </div>
-          <p className="text-sm text-gray-500">Cartographie et analyse de densité</p>
+          <div className="min-w-0">
+            <h1 className="text-lg font-bold text-gray-900 tracking-tight leading-tight">GEO Membres</h1>
+            <p className="text-xs text-gray-500 truncate">Cartographie et analyse de densité</p>
+          </div>
         </div>
 
-        <div className="p-6 border-b border-gray-200 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-            <FileSpreadsheet className="w-4 h-4" />
-            Importation
-          </h2>
-
-          <div className="space-y-4">
+        <Section
+          icon={<FileSpreadsheet className="w-4 h-4" />}
+          title="Importation"
+          summary={importSummary}
+          open={openSections.import}
+          onToggle={() => toggleSection('import')}
+        >
+          <div className="space-y-2">
             {renderImportZone('members')}
             {renderImportZone('organisms')}
             <input
@@ -588,32 +708,39 @@ export default function Sidebar({
               </div>
             )}
           </div>
-        </div>
+        </Section>
 
         {organisms.length > 0 && (
-          <div className="p-6 border-b border-gray-200 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-                <Building2 className="w-4 h-4" />
-                Organismes
-              </h2>
-              <label className="relative inline-flex items-center cursor-pointer" title="Afficher le rayon d'attractivité">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  checked={orgRadius.enabled}
-                  onChange={(e) => setOrgRadius({ ...orgRadius, enabled: e.target.checked })}
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-              </label>
-            </div>
-
-            {orgRadius.enabled && (
-              <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
-                <div className="space-y-2">
-                  <div className="text-sm font-medium text-gray-700 flex justify-between items-center">
-                    <label htmlFor="org-radius-km">Rayon d'attractivité</label>
-                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+          <Section
+            icon={<Building2 className="w-4 h-4" />}
+            title="Organismes"
+            summary={orgRadius.enabled ? `rayon ${orgRadius.radiusKm} km` : 'rayon masqué'}
+            open={openSections.organisms}
+            onToggle={() => toggleSection('organisms')}
+            action={
+              <Switch
+                checked={orgRadius.enabled}
+                onChange={(checked) => setOrgRadius({ ...orgRadius, enabled: checked })}
+                color="orange"
+                title="Afficher le rayon d'attractivité"
+              />
+            }
+          >
+            <div className="space-y-3">
+              {orgRadius.enabled && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <label htmlFor="org-radius-km" className="text-sm text-gray-700 shrink-0">Rayon</label>
+                    <input
+                      type="range"
+                      min={ORG_RADIUS_MIN}
+                      max={ORG_RADIUS_MAX}
+                      value={orgRadius.radiusKm}
+                      onChange={(e) => setOrgRadius({ ...orgRadius, radiusKm: parseInt(e.target.value) })}
+                      className="flex-1 min-w-0 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                      aria-label="Rayon d'attractivité"
+                    />
+                    <span className="flex items-center gap-1 text-sm text-orange-600 font-semibold shrink-0">
                       <input
                         id="org-radius-km"
                         type="number"
@@ -625,178 +752,141 @@ export default function Sidebar({
                         onChange={(e) => handleRadiusDraft(e.target.value)}
                         onBlur={commitRadiusDraft}
                         onKeyDown={(e) => { if (e.key === 'Enter') commitRadiusDraft(); }}
-                        className="w-16 border border-gray-300 rounded-md px-2 py-0.5 text-right text-emerald-700 font-semibold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                        className="w-14 border border-gray-300 rounded-md px-1.5 py-0.5 text-right text-orange-700 font-semibold focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
                       />
                       km
                     </span>
                   </div>
-                  <input
-                    type="range"
-                    min={ORG_RADIUS_MIN}
-                    max={ORG_RADIUS_MAX}
-                    value={orgRadius.radiusKm}
-                    onChange={(e) => setOrgRadius({ ...orgRadius, radiusKm: parseInt(e.target.value) })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
-                  />
-                </div>
 
-                {members.length > 0 && (
-                  <div className="flex justify-between items-baseline text-sm bg-emerald-50 p-3 rounded-lg border border-emerald-100">
-                    <span className="font-medium text-gray-700">Membres couverts</span>
-                    <span>
-                      <span className="text-lg font-black text-emerald-700">{organismStats.coveredCount}</span>
-                      <span className="text-gray-500"> / {members.length}</span>
-                    </span>
+                  {members.length > 0 && (
+                    <div className="flex justify-between items-baseline text-sm bg-orange-50 px-3 py-2 rounded-lg border border-orange-100">
+                      <span className="font-medium text-gray-700">Membres couverts</span>
+                      <span>
+                        <span className="text-base font-black text-orange-700">{organismStats.coveredCount}</span>
+                        <span className="text-gray-500"> / {members.length}</span>
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div>
+                <button
+                  onClick={() => setShowOrganismList(v => !v)}
+                  className="flex items-center gap-1 text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700"
+                >
+                  {showOrganismList ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                  Liste des organismes ({organisms.length})
+                </button>
+                {showOrganismList && (
+                  <div className="mt-2 max-h-48 overflow-y-auto pr-1 space-y-1.5 custom-scrollbar">
+                    {sortedOrganisms.map((org) => (
+                      <React.Fragment key={org.id}>
+                        <ListRow
+                          title={org.name || 'Sans nom'}
+                          subtitle={<>{org.type && <span className="text-orange-700 font-medium">{org.type} · </span>}{org.postalCode} {org.city}</>}
+                          badge={orgRadius.enabled && members.length > 0 ? String(organismStats.counts.get(org.id) || 0) : undefined}
+                          badgeTitle={`Membres à moins de ${orgRadius.radiusKm} km`}
+                          color="orange"
+                        />
+                      </React.Fragment>
+                    ))}
                   </div>
                 )}
               </div>
-            )}
-
-            <div className="max-h-[30vh] overflow-y-auto pr-2 space-y-2 custom-scrollbar">
-              {sortedOrganisms.map((org) => (
-                <div key={org.id} className="flex items-center justify-between text-sm bg-gray-50 p-2 rounded-lg border border-gray-100">
-                  <div className="flex flex-col overflow-hidden pr-2">
-                    <span className="font-medium text-gray-900 truncate">{org.name || 'Sans nom'}</span>
-                    <span className="text-xs text-gray-500 truncate">
-                      {org.type && <span className="text-emerald-700 font-medium">{org.type} · </span>}
-                      {org.postalCode} {org.city}
-                    </span>
-                  </div>
-                  {orgRadius.enabled && members.length > 0 && (
-                    <span className="bg-emerald-100 text-emerald-700 py-1 px-2.5 rounded-md font-bold text-xs shrink-0" title={`Membres à moins de ${orgRadius.radiusKm} km`}>
-                      {organismStats.counts.get(org.id) || 0}
-                    </span>
-                  )}
-                </div>
-              ))}
             </div>
-          </div>
+          </Section>
         )}
 
-        <div className="p-6 border-b border-gray-200 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-              <Settings2 className="w-4 h-4" />
-              Repère
-            </h2>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={marker.enabled}
-                onChange={(e) => setMarker({ ...marker, enabled: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-            </label>
-          </div>
-
-          {marker.enabled && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-700 flex justify-between">
-                  <span>Rayon de recherche</span>
-                  <span className="text-indigo-600 font-semibold">{marker.radiusKm} km</span>
-                </label>
+        <Section
+          icon={<Settings2 className="w-4 h-4" />}
+          title="Repère"
+          summary={marker.enabled ? `rayon ${marker.radiusKm} km` : 'désactivé'}
+          open={openSections.marker}
+          onToggle={() => toggleSection('marker')}
+          action={
+            <Switch
+              checked={marker.enabled}
+              onChange={(checked) => setMarker({ ...marker, enabled: checked })}
+              color="indigo"
+              title="Activer le repère"
+            />
+          }
+        >
+          {marker.enabled ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-700 shrink-0">Rayon</span>
                 <input
                   type="range"
                   min="1"
                   max="500"
                   value={marker.radiusKm}
                   onChange={(e) => setMarker({ ...marker, radiusKm: parseInt(e.target.value) })}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  className="flex-1 min-w-0 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  aria-label="Rayon de recherche"
                 />
+                <span className="text-sm text-indigo-600 font-semibold shrink-0 w-14 text-right">{marker.radiusKm} km</span>
               </div>
-
-              <p className="text-xs text-gray-500 bg-gray-50 p-3 rounded-lg border border-gray-100">
-                Déplacez le marqueur sur la carte pour ajuster la zone de recherche.
-              </p>
+              <p className="text-xs text-gray-500">Déplacez le marqueur ou cliquez sur la carte pour ajuster la zone.</p>
             </div>
+          ) : (
+            <p className="text-xs text-gray-500">Activez le repère pour compter membres et organismes dans une zone.</p>
           )}
-        </div>
+        </Section>
 
+        {/* Résultats du repère : occupe la hauteur restante, seule la liste défile */}
         {marker.enabled && (
-          <div className="p-6 bg-indigo-50/50 flex-1 space-y-4">
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-emerald-100">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
-                  <Building2 className="w-4 h-4 text-emerald-600" />
-                </div>
-                <h3 className="text-sm font-medium text-gray-700">Organismes dans la zone</h3>
-              </div>
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-4xl font-black text-emerald-600">{organismsInRadius.length}</span>
-                <span className="text-sm font-medium text-gray-500">
-                  / {organisms.length}
-                </span>
-              </div>
-
-              {organismsInRadius.length > 0 && (
-                <div className="mt-5 pt-4 border-t border-emerald-50">
-                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                    Distance au repère
-                  </h4>
-                  <div className="max-h-[25vh] overflow-y-auto pr-2 space-y-2 custom-scrollbar">
-                    {organismsInRadius.map(({ organism, distanceKm }) => (
-                      <div key={organism.id} className="flex items-center justify-between text-sm bg-gray-50 p-2 rounded-lg border border-gray-100">
-                        <div className="flex flex-col overflow-hidden pr-2">
-                          <span className="font-medium text-gray-900 truncate">{organism.name || 'Sans nom'}</span>
-                          <span className="text-xs text-gray-500 truncate">
-                            {organism.type && <span className="text-emerald-700 font-medium">{organism.type} · </span>}
-                            {organism.postalCode} {organism.city}
-                          </span>
-                        </div>
-                        <span className="bg-emerald-100 text-emerald-700 py-1 px-2.5 rounded-md font-bold text-xs shrink-0">
-                          {Math.round(distanceKm)} km
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+          <div className="flex-1 min-h-[260px] flex flex-col bg-indigo-50/50 p-4 gap-3">
+            <div className="grid grid-cols-2 gap-2 shrink-0">
+              <StatTile
+                icon={<Building2 className="w-4 h-4" />}
+                label="Organismes"
+                value={organismsInRadius.length}
+                total={organisms.length}
+                color="orange"
+              />
+              <StatTile
+                icon={<Users className="w-4 h-4" />}
+                label="Membres"
+                value={membersInRadius.length}
+                total={members.length}
+                color="indigo"
+              />
             </div>
 
-            <div className="bg-white rounded-2xl p-5 shadow-sm border border-indigo-100">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
-                  <Users className="w-4 h-4 text-indigo-600" />
-                </div>
-                <h3 className="text-sm font-medium text-gray-700">Membres dans la zone</h3>
+            <div className="flex-1 min-h-0 flex flex-col bg-white rounded-xl border border-gray-200 shadow-sm">
+              <div className="flex border-b border-gray-100 shrink-0 text-xs font-semibold">
+                <ResultTab active={resultTab === 'villes'} onClick={() => setResultTab('villes')} color="indigo">
+                  Villes ({groupedMembers.length})
+                </ResultTab>
+                <ResultTab active={resultTab === 'organismes'} onClick={() => setResultTab('organismes')} color="orange">
+                  Organismes ({organismsInRadius.length})
+                </ResultTab>
               </div>
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-4xl font-black text-indigo-600">{membersInRadius.length}</span>
-                <span className="text-sm font-medium text-gray-500">
-                  / {members.length}
-                </span>
+              <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+                {resultTab === 'villes' && (groupedMembers.length > 0 ? groupedMembers.map((group) => (
+                  <React.Fragment key={`${group.cp}-${group.city}`}>
+                    <ListRow
+                      title={group.city || 'Inconnue'}
+                      subtitle={group.cp || 'CP inconnu'}
+                      badge={String(group.count)}
+                      color="indigo"
+                    />
+                  </React.Fragment>
+                )) : <EmptyList>Aucun membre dans la zone</EmptyList>)}
+                {resultTab === 'organismes' && (organismsInRadius.length > 0 ? organismsInRadius.map(({ organism, distanceKm }) => (
+                  <React.Fragment key={organism.id}>
+                    <ListRow
+                      title={organism.name || 'Sans nom'}
+                      subtitle={<>{organism.type && <span className="text-orange-700 font-medium">{organism.type} · </span>}{organism.postalCode} {organism.city}</>}
+                      badge={`${Math.round(distanceKm)} km`}
+                      badgeTitle="Distance au repère"
+                      color="orange"
+                    />
+                  </React.Fragment>
+                )) : <EmptyList>Aucun organisme dans la zone</EmptyList>)}
               </div>
-              {members.length > 0 && (
-                <div className="mt-3 w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                  <div 
-                    className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min(100, (membersInRadius.length / members.length) * 100)}%` }}
-                  />
-                </div>
-              )}
-
-              {membersInRadius.length > 0 && (
-                <div className="mt-5 pt-4 border-t border-indigo-50">
-                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                    Répartition par ville
-                  </h4>
-                  <div className="max-h-[35vh] overflow-y-auto pr-2 space-y-2 custom-scrollbar">
-                    {groupedMembers.map((group) => (
-                      <div key={`${group.cp}-${group.city}`} className="flex items-center justify-between text-sm bg-gray-50 p-2 rounded-lg border border-gray-100">
-                        <div className="flex flex-col overflow-hidden pr-2">
-                          <span className="font-medium text-gray-900 truncate">{group.city || 'Inconnue'}</span>
-                          <span className="text-xs text-gray-500">{group.cp || 'CP inconnu'}</span>
-                        </div>
-                        <span className="bg-indigo-100 text-indigo-700 py-1 px-2.5 rounded-md font-bold text-xs shrink-0">
-                          {group.count}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -820,7 +910,7 @@ export default function Sidebar({
             <p className="text-sm text-gray-600 mb-6">
               Voulez-vous débuter l'analyse du fichier <span className="font-semibold text-gray-900">{stagedFile.file.name}</span> ({IMPORT_CONFIG[stagedFile.kind].entity}) ?
               {stagedFile.kind === 'organisms' && organisms.length > 0 && (
-                <span className="block mt-2 text-emerald-700 font-medium">Les organismes déjà importés seront remplacés.</span>
+                <span className="block mt-2 text-orange-700 font-medium">Les organismes déjà importés seront remplacés.</span>
               )}
               {isReimporting && (
                 <span className="block mt-2 text-indigo-600 font-medium">Les membres valides seront ajoutés à la liste existante.</span>
