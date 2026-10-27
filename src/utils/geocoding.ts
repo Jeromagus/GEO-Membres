@@ -1,10 +1,16 @@
 import Papa from 'papaparse';
 
-export interface GeocodeResult {
+export interface ImportRow {
   index: number;
   postalCode: string;
   city: string;
   country: string;
+  // Organismes uniquement : conservés tels quels à travers le géocodage
+  type?: string;
+  name?: string;
+}
+
+export interface GeocodeResult extends ImportRow {
   lat?: number;
   lng?: number;
   valid: boolean;
@@ -24,9 +30,9 @@ export function normalizeCityName(name: string): string {
 }
 
 export async function geocodeInChunks(
-  rows: { index: number; postalCode: string; city: string; country: string }[],
+  rows: ImportRow[],
   onProgress: (count: number) => void,
-  onResolve: (row: { index: number; postalCode: string; city: string; country: string }) => Promise<{ postalCode: string; city: string } | null>,
+  onResolve: (row: ImportRow) => Promise<{ postalCode: string; city: string } | null>,
   signal: AbortSignal
 ): Promise<GeocodeResult[]> {
   const chunkSize = 100;
@@ -56,7 +62,7 @@ export async function geocodeInChunks(
     
     let retries = 3;
     let success = false;
-    let invalidInChunk: { index: number; postalCode: string; city: string; country: string }[] = [];
+    let invalidInChunk: ImportRow[] = [];
 
     while (retries > 0 && !success) {
       try {
@@ -82,6 +88,7 @@ export async function geocodeInChunks(
           
           if (valid) {
             results.push({
+              ...originalRow,
               index: parseInt(row.id),
               postalCode: row.postcode || originalRow?.postalCode || '',
               city: row.city || originalRow?.city || '',
@@ -188,6 +195,7 @@ export async function geocodeInChunks(
           if (data.features && data.features.length > 0) {
             const [lng, lat] = data.features[0].geometry.coordinates;
             results.push({
+              ...invalidRow,
               index: invalidRow.index,
               postalCode: data.features[0].properties.postcode || corrected.postalCode,
               city: data.features[0].properties.city || corrected.city,
