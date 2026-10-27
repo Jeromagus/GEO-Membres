@@ -10,18 +10,12 @@ import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
 // Fonds de carte gratuits et sans clé. maxNativeZoom : au-delà, les tuiles sont agrandies.
 const IGN_WMTS = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
 const IGN_ATTRIBUTION = '&copy; <a href="https://geoservices.ign.fr/">IGN</a>';
-const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
 const BASE_LAYERS = [
   {
     id: 'plan-ign', label: 'Plan IGN',
     url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
     attribution: `${IGN_ATTRIBUTION} – Plan IGN`, maxNativeZoom: 19,
-  },
-  {
-    id: 'gris-clair', label: 'Gris clair',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
   },
   {
     // Le Gris clair recoloré dans le navigateur par le filtre SVG #clair-colore (voir ClairColoreFilter)
@@ -31,21 +25,6 @@ const BASE_LAYERS = [
     className: 'tiles-clair-colore',
     // Noms de villes, régions, pays : quantité selon le zoom, non recolorés
     labelsUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
-  },
-  {
-    id: 'photos', label: 'Photos aériennes',
-    url: `${IGN_WMTS}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg`,
-    attribution: `${IGN_ATTRIBUTION} – Photographies aériennes`, maxNativeZoom: 19,
-  },
-  {
-    id: 'osm-france', label: 'OpenStreetMap France',
-    url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-    attribution: `${OSM_ATTRIBUTION} – tuiles OSM France`, maxNativeZoom: 19,
-  },
-  {
-    id: 'relief', label: 'Relief',
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: `${OSM_ATTRIBUTION}, SRTM – style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)`, maxNativeZoom: 17,
   },
 ];
 
