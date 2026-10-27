@@ -5,6 +5,54 @@ import L from 'leaflet';
 import { Member, MarkerState, Organism, OrganismRadiusState } from '../types';
 import { OrganismStats } from './Sidebar';
 import * as turf from '@turf/turf';
+import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
+
+// Fonds de carte gratuits et sans clé. maxNativeZoom : au-delà, les tuiles sont agrandies.
+const IGN_WMTS = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
+const IGN_ATTRIBUTION = '&copy; <a href="https://geoservices.ign.fr/">IGN</a>';
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+
+const BASE_LAYERS = [
+  {
+    id: 'plan-ign', label: 'Plan IGN',
+    url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
+    attribution: `${IGN_ATTRIBUTION} – Plan IGN`, maxNativeZoom: 19,
+  },
+  {
+    id: 'gris-clair', label: 'Gris clair',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
+  },
+  {
+    id: 'photos', label: 'Photos aériennes',
+    url: `${IGN_WMTS}&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg`,
+    attribution: `${IGN_ATTRIBUTION} – Photographies aériennes`, maxNativeZoom: 19,
+  },
+  {
+    id: 'osm-france', label: 'OpenStreetMap France',
+    url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+    attribution: `${OSM_ATTRIBUTION} – tuiles OSM France`, maxNativeZoom: 19,
+  },
+  {
+    id: 'relief', label: 'Relief',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: `${OSM_ATTRIBUTION}, SRTM – style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)`, maxNativeZoom: 17,
+  },
+];
+
+const ADMIN_LIMITS_URL = `${IGN_WMTS}&LAYER=LIMITES_ADMINISTRATIVES_EXPRESS.LATEST&STYLE=normal&FORMAT=image/png`;
+
+// Choix mémorisés dans le navigateur ; le stockage peut être indisponible (navigation privée…)
+const STORAGE_BASE = 'geo-membres:fond';
+const STORAGE_ADMIN = 'geo-membres:limites';
+
+function readStorage(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function writeStorage(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch { /* sans mémorisation */ }
+}
 
 // Fix Leaflet default icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -21,6 +69,17 @@ const customMarkerIcon = new L.Icon({
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
   shadowSize: [41, 41]
+});
+
+// Membre isolé : même rond que les petits groupes, avec le chiffre 1
+const memberIcon = L.divIcon({
+  html: `<div class="flex items-center justify-center rounded-full shadow-lg border-2 border-white/50 w-8 h-8 text-xs bg-indigo-500/80 text-white">
+          <span>1</span>
+        </div>`,
+  className: 'custom-marker-cluster',
+  iconSize: L.point(32, 32),
+  iconAnchor: L.point(16, 16),
+  popupAnchor: L.point(0, -16),
 });
 
 // Organisme seul : carré émeraude, distinct des épingles des membres
@@ -55,6 +114,23 @@ function MapEvents({ marker, setMarker }: { marker: MarkerState, setMarker: (m: 
 
 export default function Map({ members, organisms, orgRadius, organismStats, marker, setMarker, setMembersInRadius }: MapProps) {
   const [map, setMap] = useState<L.Map | null>(null);
+  const [baseLayerId, setBaseLayerId] = useState(() => {
+    const saved = readStorage(STORAGE_BASE);
+    return BASE_LAYERS.some(l => l.id === saved) ? saved! : BASE_LAYERS[0].id;
+  });
+  const [showAdminLimits, setShowAdminLimits] = useState(() => readStorage(STORAGE_ADMIN) === '1');
+  const [layersCollapsed, setLayersCollapsed] = useState(false);
+  const baseLayer = BASE_LAYERS.find(l => l.id === baseLayerId) || BASE_LAYERS[0];
+
+  const chooseBaseLayer = (id: string) => {
+    setBaseLayerId(id);
+    writeStorage(STORAGE_BASE, id);
+  };
+
+  const toggleAdminLimits = (checked: boolean) => {
+    setShowAdminLimits(checked);
+    writeStorage(STORAGE_ADMIN, checked ? '1' : '0');
+  };
 
   // Calculate members in radius
   useEffect(() => {
@@ -134,11 +210,22 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
         className="w-full h-full z-0"
         ref={setMap}
       >
+        {/* key : l'attribution d'une TileLayer n'est pas mise à jour, on la recrée */}
         <TileLayer
-          attribution='&copy; <a href="https://geoservices.ign.fr/">IGN</a> – Plan IGN'
-          url="https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+          key={baseLayer.id}
+          attribution={baseLayer.attribution}
+          url={baseLayer.url}
+          maxNativeZoom={baseLayer.maxNativeZoom}
           maxZoom={19}
         />
+        {showAdminLimits && (
+          <TileLayer
+            attribution={`${IGN_ATTRIBUTION} – Limites administratives`}
+            url={ADMIN_LIMITS_URL}
+            maxZoom={19}
+            zIndex={2}
+          />
+        )}
         
         <MapEvents marker={marker} setMarker={setMarker} />
 
@@ -164,6 +251,7 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
               <Marker
                 key={member.id}
                 position={[member.lat, member.lng]}
+                icon={memberIcon}
               >
                 <Popup>
                   <div className="text-sm min-w-[150px]">
@@ -258,29 +346,79 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
         </div>
       )}
 
-      {(members.length > 0 || organisms.length > 0) && (
-        <div className="absolute bottom-6 left-4 z-[1000] bg-white/90 backdrop-blur px-3 py-2 rounded-xl shadow-sm border border-gray-200 text-xs text-gray-700 space-y-1.5 pointer-events-none">
-          {members.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="flex gap-0.5">
-                <span className="w-3 h-3 rounded-full bg-indigo-500" />
-                <span className="w-3 h-3 rounded-full bg-purple-600" />
-                <span className="w-3 h-3 rounded-full bg-fuchsia-700" />
-              </span>
-              Membres ({members.length})
+      <div className="absolute bottom-6 left-4 z-[1000] w-56 bg-white/95 backdrop-blur rounded-xl shadow-sm border border-gray-200 text-xs text-gray-700">
+        <button
+          onClick={() => setLayersCollapsed(c => !c)}
+          className="w-full flex items-center justify-between px-3 py-2 font-semibold text-gray-900 uppercase tracking-wider"
+          title={layersCollapsed ? 'Afficher les calques' : 'Replier les calques'}
+        >
+          <span className="flex items-center gap-2">
+            <Layers className="w-4 h-4" />
+            Calques
+          </span>
+          {layersCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {/* La légende reste visible quand les calques sont repliés */}
+        <Legend members={members} organisms={organisms} orgRadius={orgRadius} />
+
+        {!layersCollapsed && (
+          <div className="px-3 pb-3 pt-2 space-y-3 border-t border-gray-100">
+            <div className="space-y-1">
+              {BASE_LAYERS.map((layer) => (
+                <label key={layer.id} className="flex items-center gap-2 cursor-pointer py-0.5">
+                  <input
+                    type="radio"
+                    name="fond-de-carte"
+                    checked={layer.id === baseLayerId}
+                    onChange={() => chooseBaseLayer(layer.id)}
+                    className="accent-indigo-600"
+                  />
+                  {layer.label}
+                </label>
+              ))}
             </div>
-          )}
-          {organisms.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="flex gap-0.5">
-                <span className="w-3 h-3 rounded-sm bg-emerald-500" />
-                <span className="w-3 h-3 rounded-sm bg-emerald-700" />
-                <span className="w-3 h-3 rounded-sm bg-emerald-900" />
-              </span>
-              Organismes ({organisms.length})
-              {orgRadius.enabled && <span className="text-gray-500">· rayon {orgRadius.radiusKm} km</span>}
-            </div>
-          )}
+
+            <label className="flex items-center gap-2 cursor-pointer pt-2 border-t border-gray-100">
+              <input
+                type="checkbox"
+                checked={showAdminLimits}
+                onChange={(e) => toggleAdminLimits(e.target.checked)}
+                className="accent-indigo-600"
+              />
+              Limites administratives
+            </label>
+          </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+function Legend({ members, organisms, orgRadius }: { members: Member[]; organisms: Organism[]; orgRadius: OrganismRadiusState }) {
+  if (members.length === 0 && organisms.length === 0) return null;
+  return (
+    <div className="px-3 pb-2 space-y-1.5">
+      {members.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="flex gap-0.5">
+            <span className="w-3 h-3 rounded-full bg-indigo-500" />
+            <span className="w-3 h-3 rounded-full bg-purple-600" />
+            <span className="w-3 h-3 rounded-full bg-fuchsia-700" />
+          </span>
+          Membres ({members.length})
+        </div>
+      )}
+      {organisms.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="flex gap-0.5">
+            <span className="w-3 h-3 rounded-sm bg-emerald-500" />
+            <span className="w-3 h-3 rounded-sm bg-emerald-700" />
+            <span className="w-3 h-3 rounded-sm bg-emerald-900" />
+          </span>
+          Organismes ({organisms.length})
+          {orgRadius.enabled && <span className="text-gray-500">· rayon {orgRadius.radiusKm} km</span>}
         </div>
       )}
     </div>
