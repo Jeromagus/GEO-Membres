@@ -49,6 +49,8 @@ const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; cpColu
 // Bornes du rayon d'attractivité (km), communes au curseur et au champ de saisie
 const ORG_RADIUS_MIN = 1;
 const ORG_RADIUS_MAX = 200;
+const MARKER_RADIUS_MIN = 1;
+const MARKER_RADIUS_MAX = 500;
 
 function toMember(g: GeocodeResult, id: string): Member {
   return { id, originalIndex: g.index, postalCode: g.postalCode, city: g.city, country: g.country, lat: g.lat, lng: g.lng };
@@ -166,11 +168,13 @@ const ACCENT = {
     switchOn: 'peer-checked:bg-indigo-600 peer-focus:ring-indigo-300',
     tile: 'border-indigo-100', icon: 'bg-indigo-100 text-indigo-600', value: 'text-indigo-600', bar: 'bg-indigo-600',
     tab: 'border-indigo-600 text-indigo-700', badge: 'bg-indigo-100 text-indigo-700',
+    input: 'text-indigo-700 focus:ring-indigo-500 focus:border-indigo-500', unit: 'text-indigo-600',
   },
   orange: {
     switchOn: 'peer-checked:bg-orange-600 peer-focus:ring-orange-300',
     tile: 'border-orange-100', icon: 'bg-orange-100 text-orange-600', value: 'text-orange-600', bar: 'bg-orange-500',
     tab: 'border-orange-500 text-orange-700', badge: 'bg-orange-100 text-orange-700',
+    input: 'text-orange-700 focus:ring-orange-500 focus:border-orange-500', unit: 'text-orange-600',
   },
 };
 
@@ -251,6 +255,54 @@ function ListRow({ title, subtitle, badge, badgeTitle, color }: {
         <span className={`py-0.5 px-2 rounded-md font-bold text-xs shrink-0 ${ACCENT[color].badge}`} title={badgeTitle}>{badge}</span>
       )}
     </div>
+  );
+}
+
+// Saisie libre d'un rayon en km : le brouillon peut être vide ou hors bornes pendant la frappe,
+// seule une valeur entière valide est appliquée ; il est recalé à la sortie du champ.
+function KmInput({ id, value, min, max, onChange, color }: {
+  id: string; value: number; min: number; max: number; onChange: (km: number) => void; color: Accent;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const handleDraft = (text: string) => {
+    setDraft(text);
+    const km = Number(text);
+    if (Number.isInteger(km) && km >= min && km <= max) onChange(km);
+  };
+
+  const commit = () => {
+    const km = Math.round(Number(draft));
+    if (!Number.isFinite(km) || draft.trim() === '') {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.min(max, Math.max(min, km));
+    setDraft(String(clamped));
+    if (clamped !== value) onChange(clamped);
+  };
+
+  return (
+    <span className={`flex items-center gap-1 text-sm font-semibold shrink-0 ${ACCENT[color].unit}`}>
+      <input
+        id={id}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        inputMode="numeric"
+        value={draft}
+        onChange={(e) => handleDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+        className={`w-14 border border-gray-300 rounded-md px-1.5 py-0.5 text-right font-semibold focus:ring-2 ${ACCENT[color].input}`}
+      />
+      km
+    </span>
   );
 }
 
@@ -381,35 +433,6 @@ export default function Sidebar({
       (organismStats.counts.get(b.id) || 0) - (organismStats.counts.get(a.id) || 0)
     );
   }, [organisms, organismStats]);
-
-  // Saisie libre du rayon : le brouillon peut être vide ou hors bornes pendant la frappe,
-  // seule une valeur entière valide est appliquée ; il est recalé à la sortie du champ.
-  const [radiusDraft, setRadiusDraft] = useState(String(orgRadius.radiusKm));
-
-  useEffect(() => {
-    setRadiusDraft(String(orgRadius.radiusKm));
-  }, [orgRadius.radiusKm]);
-
-  const handleRadiusDraft = (value: string) => {
-    setRadiusDraft(value);
-    const km = Number(value);
-    if (Number.isInteger(km) && km >= ORG_RADIUS_MIN && km <= ORG_RADIUS_MAX) {
-      setOrgRadius({ ...orgRadius, radiusKm: km });
-    }
-  };
-
-  const commitRadiusDraft = () => {
-    const km = Math.round(Number(radiusDraft));
-    if (!Number.isFinite(km) || radiusDraft.trim() === '') {
-      setRadiusDraft(String(orgRadius.radiusKm));
-      return;
-    }
-    const clamped = Math.min(ORG_RADIUS_MAX, Math.max(ORG_RADIUS_MIN, km));
-    setRadiusDraft(String(clamped));
-    if (clamped !== orgRadius.radiusKm) {
-      setOrgRadius({ ...orgRadius, radiusKm: clamped });
-    }
-  };
 
   const handleFileSelect = (kind: ImportKind) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -740,22 +763,14 @@ export default function Sidebar({
                       className="flex-1 min-w-0 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
                       aria-label="Rayon d'attractivité"
                     />
-                    <span className="flex items-center gap-1 text-sm text-orange-600 font-semibold shrink-0">
-                      <input
-                        id="org-radius-km"
-                        type="number"
-                        min={ORG_RADIUS_MIN}
-                        max={ORG_RADIUS_MAX}
-                        step={1}
-                        inputMode="numeric"
-                        value={radiusDraft}
-                        onChange={(e) => handleRadiusDraft(e.target.value)}
-                        onBlur={commitRadiusDraft}
-                        onKeyDown={(e) => { if (e.key === 'Enter') commitRadiusDraft(); }}
-                        className="w-14 border border-gray-300 rounded-md px-1.5 py-0.5 text-right text-orange-700 font-semibold focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                      />
-                      km
-                    </span>
+                    <KmInput
+                      id="org-radius-km"
+                      value={orgRadius.radiusKm}
+                      min={ORG_RADIUS_MIN}
+                      max={ORG_RADIUS_MAX}
+                      onChange={(km) => setOrgRadius({ ...orgRadius, radiusKm: km })}
+                      color="orange"
+                    />
                   </div>
 
                   {members.length > 0 && (
@@ -816,17 +831,24 @@ export default function Sidebar({
           {marker.enabled ? (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-700 shrink-0">Rayon</span>
+                <label htmlFor="marker-radius-km" className="text-sm text-gray-700 shrink-0">Rayon</label>
                 <input
                   type="range"
-                  min="1"
-                  max="500"
+                  min={MARKER_RADIUS_MIN}
+                  max={MARKER_RADIUS_MAX}
                   value={marker.radiusKm}
                   onChange={(e) => setMarker({ ...marker, radiusKm: parseInt(e.target.value) })}
                   className="flex-1 min-w-0 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                   aria-label="Rayon de recherche"
                 />
-                <span className="text-sm text-indigo-600 font-semibold shrink-0 w-14 text-right">{marker.radiusKm} km</span>
+                <KmInput
+                  id="marker-radius-km"
+                  value={marker.radiusKm}
+                  min={MARKER_RADIUS_MIN}
+                  max={MARKER_RADIUS_MAX}
+                  onChange={(km) => setMarker({ ...marker, radiusKm: km })}
+                  color="indigo"
+                />
               </div>
               <p className="text-xs text-gray-500">Déplacez le marqueur ou cliquez sur la carte pour ajuster la zone.</p>
             </div>
