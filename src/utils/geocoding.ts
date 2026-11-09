@@ -1,4 +1,6 @@
 import Papa from 'papaparse';
+import { resolveCountry } from './country';
+import { geocodeForeign } from './nominatim';
 
 export interface ImportRow {
   index: number;
@@ -14,6 +16,48 @@ export interface GeocodeResult extends ImportRow {
   lat?: number;
   lng?: number;
   valid: boolean;
+}
+
+export interface Correction {
+  postalCode: string;
+  city: string;
+  country: string;
+}
+
+// Géocode une adresse corrigée à la main : API Adresse pour la France, Nominatim ailleurs
+export async function geocodeOne(
+  row: ImportRow,
+  corrected: Correction,
+  signal: AbortSignal
+): Promise<GeocodeResult> {
+  const country = resolveCountry(corrected.country, corrected.postalCode);
+  try {
+    if (country.isFrance) {
+      const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(corrected.city)}&postcode=${encodeURIComponent(corrected.postalCode)}&limit=1`, { signal });
+      const data = await res.json();
+      if (data.features && data.features.length > 0) {
+        const [lng, lat] = data.features[0].geometry.coordinates;
+        return {
+          ...row,
+          postalCode: data.features[0].properties.postcode || corrected.postalCode,
+          city: data.features[0].properties.city || corrected.city,
+          country: country.label,
+          lat,
+          lng,
+          valid: true
+        };
+      }
+    } else {
+      const hit = await geocodeForeign(corrected.postalCode, corrected.city, country, signal);
+      if (hit) {
+        return { ...row, postalCode: hit.postalCode, city: hit.city, country: country.label, lat: hit.lat, lng: hit.lng, valid: true };
+      }
+    }
+  } catch (err: any) {
+    if (err.message === 'Aborted' || err.name === 'AbortError' || signal.aborted) throw new Error('Aborted');
+    console.error('Geocode error:', err);
+  }
+  return { ...row, valid: false };
 }
 
 export function normalizeCityName(name: string): string {
@@ -32,18 +76,25 @@ export function normalizeCityName(name: string): string {
 export async function geocodeInChunks(
   rows: ImportRow[],
   onProgress: (count: number) => void,
-  onResolve: (row: ImportRow) => Promise<{ postalCode: string; city: string } | null>,
+  onResolve: (row: ImportRow) => Promise<Correction | null>,
   signal: AbortSignal
 ): Promise<GeocodeResult[]> {
   const chunkSize = 100;
   const results: GeocodeResult[] = [];
   let processed = 0;
 
-  for (let i = 0; i < rows.length; i += chunkSize) {
+  // Le pays de chaque ligne est normalisé une fois : la France passe par l'API Adresse
+  // par lots, les autres pays par Nominatim, une adresse à la fois.
+  const countryOf = new Map(rows.map(r => [r.index, resolveCountry(r.country, r.postalCode)]));
+  const normalized = rows.map(r => ({ ...r, country: countryOf.get(r.index)!.label }));
+  const frenchRows = normalized.filter(r => countryOf.get(r.index)!.isFrance);
+  const foreignRows = normalized.filter(r => !countryOf.get(r.index)!.isFrance);
+
+  for (let i = 0; i < frenchRows.length; i += chunkSize) {
     if (signal.aborted) {
       throw new Error('Aborted');
     }
-    const chunk = rows.slice(i, i + chunkSize);
+    const chunk = frenchRows.slice(i, i + chunkSize);
     
     // Create CSV for this chunk safely using Papa.unparse
     const csvData = chunk.map(r => ({
@@ -176,52 +227,43 @@ export async function geocodeInChunks(
         console.error('Auto-correction error:', err);
       }
 
-      let corrected: { postalCode: string; city: string } | null = null;
+      let corrected: Correction | null = null;
 
       if (autoCorrectedCity) {
-        corrected = { 
-          postalCode: autoCorrectedPostalCode || invalidRow.postalCode, 
-          city: autoCorrectedCity 
+        corrected = {
+          postalCode: autoCorrectedPostalCode || invalidRow.postalCode,
+          city: autoCorrectedCity,
+          country: invalidRow.country
         };
       } else {
         corrected = await onResolve(invalidRow);
       }
-      
-      if (corrected) {
-        try {
-          const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(corrected.city)}&postcode=${encodeURIComponent(corrected.postalCode)}&limit=1`, { signal });
-          const data = await res.json();
-          
-          if (data.features && data.features.length > 0) {
-            const [lng, lat] = data.features[0].geometry.coordinates;
-            results.push({
-              ...invalidRow,
-              index: invalidRow.index,
-              postalCode: data.features[0].properties.postcode || corrected.postalCode,
-              city: data.features[0].properties.city || corrected.city,
-              country: invalidRow.country,
-              lat,
-              lng,
-              valid: true
-            });
-          } else {
-            results.push({ ...invalidRow, valid: false });
-          }
-        } catch (err) {
-          results.push({ ...invalidRow, valid: false });
-        }
-      } else {
-        results.push({ ...invalidRow, valid: false });
-      }
+
+      results.push(corrected ? await geocodeOne(invalidRow, corrected, signal) : { ...invalidRow, valid: false });
     }
 
     processed += chunk.length;
     onProgress(processed);
     
     // Add a small delay between chunks to avoid rate limiting
-    if (i + chunkSize < rows.length) {
+    if (i + chunkSize < frenchRows.length) {
       await new Promise(resolve => setTimeout(resolve, 300));
     }
+  }
+
+  for (const row of foreignRows) {
+    if (signal.aborted) throw new Error('Aborted');
+    const hit = await geocodeForeign(row.postalCode, row.city, countryOf.get(row.index)!, signal);
+
+    if (hit) {
+      results.push({ ...row, postalCode: hit.postalCode, city: hit.city, lat: hit.lat, lng: hit.lng, valid: true });
+    } else {
+      const corrected = await onResolve(row);
+      results.push(corrected ? await geocodeOne(row, corrected, signal) : { ...row, valid: false });
+    }
+
+    processed++;
+    onProgress(processed);
   }
 
   return results;

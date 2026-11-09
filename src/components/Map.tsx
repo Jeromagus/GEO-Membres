@@ -7,6 +7,7 @@ import { OrganismStats } from './Sidebar';
 import * as turf from '@turf/turf';
 import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import CityLabels, { CityDensity } from './CityLabels';
+import { foreignCountryLabel } from '../utils/country';
 
 // Fonds de carte gratuits et sans clé. maxNativeZoom : au-delà, les tuiles sont agrandies.
 const IGN_WMTS = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
@@ -291,6 +292,12 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
                         <span className="text-gray-400 text-xs uppercase tracking-wider">Ville:</span> 
                         <span className="font-medium">{member.city}</span>
                       </span>
+                      {foreignCountryLabel(member.country) && (
+                        <span className="flex items-center gap-1">
+                          <span className="text-gray-400 text-xs uppercase tracking-wider">Pays:</span>
+                          <span className="font-medium">{member.country}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 </Popup>
@@ -318,7 +325,7 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
                       )}
                       <span className="flex items-center gap-1">
                         <span className="text-gray-400 text-xs uppercase tracking-wider">Ville:</span>
-                        <span className="font-medium">{org.postalCode} {org.city}</span>
+                        <span className="font-medium">{org.postalCode} {org.city}{foreignCountryLabel(org.country) && ` · ${org.country}`}</span>
                       </span>
                       {orgRadius.enabled && members.length > 0 && (
                         <span className="mt-1 text-orange-700 font-semibold">

@@ -3,7 +3,8 @@ import { Upload, MapPin, Settings2, Users, FileSpreadsheet, AlertCircle, Edit3, 
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { Member, MarkerState, Organism, OrganismRadiusState } from '../types';
-import { geocodeInChunks, GeocodeResult, ImportRow } from '../utils/geocoding';
+import { geocodeInChunks, geocodeOne, Correction, GeocodeResult, ImportRow } from '../utils/geocoding';
+import { foreignCountryLabel, resolveCountry } from '../utils/country';
 
 export interface OrganismStats {
   // Nombre de membres à moins du rayon d'attractivité, par id d'organisme
@@ -40,7 +41,8 @@ interface ImportResults {
   invalidData: GeocodeResult[];
 }
 
-// Colonnes attendues : CP,VILLE,PAYS (membres) ; TYPE,NOM,CP,VILLE,PAYS (organismes)
+// Colonnes attendues : CP,VILLE,PAYS (membres) ; TYPE,NOM,CP,VILLE,PAYS (organismes).
+// PAYS vide = France.
 const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; cpColumn: number; entity: string }> = {
   members: { label: 'Importer Membres', columns: 'CP,VILLE,PAYS', cpColumn: 0, entity: 'membres' },
   organisms: { label: 'Importer Organismes', columns: 'TYPE,NOM,CP,VILLE,PAYS', cpColumn: 2, entity: 'organismes' },
@@ -70,13 +72,19 @@ function ResolutionModal({
 }: { 
   row: { index: number; postalCode: string; city: string; country: string }; 
   initialOptions: string[]; 
-  onResolve: (result: { postalCode: string; city: string } | null) => void 
+  onResolve: (result: Correction | null) => void
 }) {
   const [postalCode, setPostalCode] = useState(row.postalCode);
   const [city, setCity] = useState(initialOptions.length === 1 ? initialOptions[0] : row.city);
+  const [country, setCountry] = useState(row.country || 'France');
   const [options, setOptions] = useState<string[]>(initialOptions);
+  const isFrance = resolveCountry(country, postalCode).isFrance;
 
   useEffect(() => {
+    if (!isFrance) {
+      setOptions([]);
+      return;
+    }
     if (postalCode !== row.postalCode && postalCode.length === 5) {
       fetch(`https://geo.api.gouv.fr/communes?codePostal=${postalCode}&fields=nom&format=json`)
         .then(res => res.json())
@@ -87,14 +95,14 @@ function ResolutionModal({
         })
         .catch(() => setOptions([]));
     }
-  }, [postalCode, row.postalCode]);
+  }, [postalCode, row.postalCode, isFrance]);
 
   return (
     <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
         <h3 className="text-lg font-bold text-gray-900 mb-2">Localisation introuvable</h3>
         <p className="text-sm text-gray-600 mb-4">
-          Ligne {row.index} : la combinaison Code Postal / Ville n'a pas été trouvée.
+          Ligne {row.index} : la combinaison Code Postal / Ville / Pays n'a pas été trouvée.
         </p>
         
         <div className="space-y-4 mb-6">
@@ -117,6 +125,15 @@ function ResolutionModal({
                 onChange={(e) => setCity(e.target.value)}
               />
             </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Pays</label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+            />
           </div>
           
           {options.length > 0 && (
@@ -149,7 +166,7 @@ function ResolutionModal({
             Ignorer
           </button>
           <button 
-            onClick={() => onResolve({ postalCode, city })}
+            onClick={() => onResolve({ postalCode, city, country })}
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
           >
             Valider
@@ -327,7 +344,7 @@ export default function Sidebar({
   const [resolvingRow, setResolvingRow] = useState<{
     row: ImportRow;
     options: string[];
-    resolve: (value: { postalCode: string; city: string } | null) => void;
+    resolve: (value: Correction | null) => void;
   } | null>(null);
 
   const [importState, setImportState] = useState<{
@@ -364,19 +381,9 @@ export default function Sidebar({
         if (result) {
           // Attempt to geocode the corrected result
           try {
-            const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(result.city)}&postcode=${encodeURIComponent(result.postalCode)}&limit=1`);
-            const data = await res.json();
+            const corrected = await geocodeOne(rowToCorrect, result, new AbortController().signal);
 
-            if (data.features && data.features.length > 0) {
-              const [lng, lat] = data.features[0].geometry.coordinates;
-              const corrected: GeocodeResult = {
-                ...rowToCorrect,
-                postalCode: data.features[0].properties.postcode || result.postalCode,
-                city: data.features[0].properties.city || result.city,
-                lat,
-                lng,
-                valid: true
-              };
+            if (corrected.valid) {
               const id = `${kind}-${Date.now()}-${rowToCorrect.index}`;
 
               if (kind === 'members') {
@@ -417,11 +424,12 @@ export default function Sidebar({
   };
 
   const groupedMembers = useMemo(() => {
-    const groups = new Map<string, { cp: string; city: string; count: number }>();
+    const groups = new Map<string, { key: string; cp: string; city: string; country: string; count: number }>();
     for (const m of membersInRadius) {
-      const key = `${m.postalCode}-${m.city}`;
+      const country = foreignCountryLabel(m.country);
+      const key = `${m.postalCode}-${m.city}-${country}`;
       if (!groups.has(key)) {
-        groups.set(key, { cp: m.postalCode, city: m.city, count: 0 });
+        groups.set(key, { key, cp: m.postalCode, city: m.city, country, count: 0 });
       }
       groups.get(key)!.count++;
     }
@@ -474,9 +482,10 @@ export default function Sidebar({
   };
 
   const handleResolveRequest = async (row: ImportRow) => {
-    return new Promise<{ postalCode: string; city: string } | null>(async (resolve) => {
+    return new Promise<Correction | null>(async (resolve) => {
       let options: string[] = [];
-      try {
+      // Suggestions de communes : France uniquement
+      if (resolveCountry(row.country, row.postalCode).isFrance) try {
         const res = await fetch(`https://geo.api.gouv.fr/communes?codePostal=${row.postalCode}&fields=nom&format=json`);
         if (res.ok) {
           const data = await res.json();
@@ -529,11 +538,13 @@ export default function Sidebar({
         throw new Error('Le fichier est vide.');
       }
 
-      // Skip header if first row doesn't look like data (e.g., doesn't have a number in the CP column)
-      let startIndex = 0;
-      if (rawData.length > 0 && !/^\d+$/.test(String(rawData[0][cpColumn]).trim())) {
-        startIndex = 1;
-      }
+      // Ligne d'en-tête : intitulés reconnus, ou code postal sans aucun chiffre
+      // (un code étranger peut contenir des lettres, ex. H2X 1Y4)
+      const HEADER_CELL = /^(cp|code|code[\s_-]*postal|zip|postcode|ville|city|commune|localit[eé]|pays|country|type|nom|name)$/i;
+      const firstRow = rawData[0] || [];
+      const firstCells = [0, 1, 2].map(k => String(firstRow[cpColumn + k] ?? '').trim());
+      const isHeader = firstCells.some(c => HEADER_CELL.test(c)) || (firstCells[0] !== '' && !/\d/.test(firstCells[0]));
+      const startIndex = isHeader ? 1 : 0;
 
       const rowsToProcess: ImportRow[] = [];
       for (let i = startIndex; i < rawData.length; i++) {
@@ -546,8 +557,9 @@ export default function Sidebar({
 
         if (!cp && !city) continue;
 
-        // Pad postal code to 5 digits if it's numeric and less than 5 digits
-        if (/^\d{1,4}$/.test(cp)) {
+        // Code postal français tronqué par le tableur (1000 → 01000), pas ailleurs :
+        // la Belgique, la Suisse ou le Luxembourg ont des codes à 4 chiffres
+        if (/^\d{1,4}$/.test(cp) && resolveCountry(country, cp).isFrance) {
           cp = cp.padStart(5, '0');
         }
 
@@ -799,7 +811,7 @@ export default function Sidebar({
                       <React.Fragment key={org.id}>
                         <ListRow
                           title={org.name || 'Sans nom'}
-                          subtitle={<>{org.type && <span className="text-orange-700 font-medium">{org.type} · </span>}{org.postalCode} {org.city}</>}
+                          subtitle={<>{org.type && <span className="text-orange-700 font-medium">{org.type} · </span>}{org.postalCode} {org.city}{foreignCountryLabel(org.country) && ` · ${org.country}`}</>}
                           badge={orgRadius.enabled && members.length > 0 ? String(organismStats.counts.get(org.id) || 0) : undefined}
                           badgeTitle={`Membres à moins de ${orgRadius.radiusKm} km`}
                           color="orange"
@@ -888,10 +900,10 @@ export default function Sidebar({
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
                 {resultTab === 'villes' && (groupedMembers.length > 0 ? groupedMembers.map((group) => (
-                  <React.Fragment key={`${group.cp}-${group.city}`}>
+                  <React.Fragment key={group.key}>
                     <ListRow
                       title={group.city || 'Inconnue'}
-                      subtitle={group.cp || 'CP inconnu'}
+                      subtitle={[group.cp || 'CP inconnu', group.country].filter(Boolean).join(' · ')}
                       badge={String(group.count)}
                       color="indigo"
                     />
@@ -901,7 +913,7 @@ export default function Sidebar({
                   <React.Fragment key={organism.id}>
                     <ListRow
                       title={organism.name || 'Sans nom'}
-                      subtitle={<>{organism.type && <span className="text-orange-700 font-medium">{organism.type} · </span>}{organism.postalCode} {organism.city}</>}
+                      subtitle={<>{organism.type && <span className="text-orange-700 font-medium">{organism.type} · </span>}{organism.postalCode} {organism.city}{foreignCountryLabel(organism.country) && ` · ${organism.country}`}</>}
                       badge={`${Math.round(distanceKm)} km`}
                       badgeTitle="Distance au repère"
                       color="orange"
