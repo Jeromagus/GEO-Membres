@@ -151,7 +151,18 @@ interface MapProps {
   marker: MarkerState;
   setMarker: (marker: MarkerState) => void;
   setMembersInRadius: (members: Member[]) => void;
+  // Change à chaque import : recadrage sur l'ensemble des membres et organismes
+  fitRequest: number;
 }
+
+// Recadrage après import : pas plus près que l'échelle d'une ville (un seul point,
+// ou des points très proches), marge pour le bandeau du haut
+const FIT_MAX_ZOOM = 12;
+const FIT_OPTIONS: L.FitBoundsOptions = {
+  maxZoom: FIT_MAX_ZOOM,
+  paddingTopLeft: [40, 70],
+  paddingBottomRight: [40, 40],
+};
 
 function MapEvents({ marker, setMarker }: { marker: MarkerState, setMarker: (m: MarkerState) => void }) {
   useMapEvents({
@@ -164,7 +175,7 @@ function MapEvents({ marker, setMarker }: { marker: MarkerState, setMarker: (m: 
   return null;
 }
 
-export default function Map({ members, organisms, orgRadius, organismStats, marker, setMarker, setMembersInRadius }: MapProps) {
+export default function Map({ members, organisms, orgRadius, organismStats, marker, setMarker, setMembersInRadius, fitRequest }: MapProps) {
   const [map, setMap] = useState<L.Map | null>(null);
   const [baseLayerId, setBaseLayerId] = useState(() => {
     const saved = readStorage(STORAGE_BASE);
@@ -210,6 +221,19 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
     setShowAdminLimits(checked);
     writeStorage(STORAGE_ADMIN, checked ? '1' : '0');
   };
+
+  // Vue d'ensemble après un import (pas au premier affichage, ni aux corrections une à une)
+  useEffect(() => {
+    if (!map || fitRequest === 0) return;
+    const points: L.LatLngExpression[] = [];
+    for (const p of [...members, ...organisms]) {
+      if (p.lat !== undefined && p.lng !== undefined) points.push([p.lat, p.lng]);
+    }
+    if (points.length === 0) return;
+    map.fitBounds(L.latLngBounds(points), FIT_OPTIONS);
+    // Volontairement limité à fitRequest : les membres sont déjà à jour quand il change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest, map]);
 
   // Calculate members in radius
   useEffect(() => {

@@ -25,6 +25,8 @@ interface SidebarProps {
   setMarker: (marker: MarkerState) => void;
   membersInRadius: Member[];
   organismsInRadius: OrganismInRadius[];
+  // Appelé à la fin d'un import, pour recadrer la carte sur les points
+  onImported: () => void;
 }
 
 export interface OrganismInRadius {
@@ -329,7 +331,7 @@ function EmptyList({ children }: { children: React.ReactNode }) {
 
 export default function Sidebar({
   members, setMembers, organisms, setOrganisms, orgRadius, setOrgRadius, organismStats,
-  marker, setMarker, membersInRadius, organismsInRadius
+  marker, setMarker, membersInRadius, organismsInRadius, onImported
 }: SidebarProps) {
   const fileInputRefs = {
     members: useRef<HTMLInputElement>(null),
@@ -602,6 +604,7 @@ export default function Sidebar({
       } else {
         setOrganisms(validRows.map(g => toOrganism(g, `organism-${timestamp}-${g.index}`)));
       }
+      if (validRows.length > 0) onImported();
 
       setImportState(prev => ({
         ...prev,

@@ -19,6 +19,8 @@ export default function App() {
     radiusKm: 50,
   });
   const [membersInRadius, setMembersInRadius] = useState<Member[]>([]);
+  // Incrémenté à chaque import terminé : la carte se recadre alors sur l'ensemble des points
+  const [fitRequest, setFitRequest] = useState(0);
 
   // Membres à moins du rayon d'attractivité de chaque organisme
   const organismStats = useMemo<OrganismStats>(() => {
@@ -76,6 +78,7 @@ export default function App() {
           setMarker={setMarker}
           membersInRadius={membersInRadius}
           organismsInRadius={organismsInRadius}
+          onImported={() => setFitRequest(n => n + 1)}
         />
       </div>
       <div className="flex-1 h-full relative z-0">
@@ -87,6 +90,7 @@ export default function App() {
           marker={marker}
           setMarker={setMarker}
           setMembersInRadius={setMembersInRadius}
+          fitRequest={fitRequest}
         />
       </div>
     </div>
