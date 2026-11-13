@@ -8,12 +8,25 @@ import * as turf from '@turf/turf';
 import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import CityLabels, { CityDensity } from './CityLabels';
 import { foreignCountryLabel } from '../utils/country';
+import GoogleTiles, { GoogleMapType } from './GoogleTiles';
 
-// Fonds de carte gratuits et sans clé. maxNativeZoom : au-delà, les tuiles sont agrandies.
+// Fonds de carte. maxNativeZoom : au-delà, les tuiles sont agrandies.
+// Les fonds Google passent par le relais du serveur (GoogleTiles), les autres sont sans clé.
 const IGN_WMTS = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}';
 const IGN_ATTRIBUTION = '&copy; <a href="https://geoservices.ign.fr/">IGN</a>';
 
-const BASE_LAYERS = [
+interface BaseLayer {
+  id: string;
+  label: string;
+  url: string;
+  attribution: string;
+  maxNativeZoom: number;
+  className?: string;
+  cityNamesByDefault: boolean;
+  google?: GoogleMapType;
+}
+
+const BASE_LAYERS: BaseLayer[] = [
   {
     id: 'plan-ign', label: 'Plan IGN',
     url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
@@ -28,6 +41,14 @@ const BASE_LAYERS = [
     attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
     className: 'tiles-clair-colore',
     cityNamesByDefault: true,
+  },
+  // url / attribution : repli sur Plan IGN si le fond Google est indisponible.
+  // Pas de satellite : Google ne le sert pas aux comptes de l'Espace économique européen.
+  {
+    id: 'google-plan', label: 'Google Maps', google: 'roadmap',
+    url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
+    attribution: `${IGN_ATTRIBUTION} – Plan IGN`, maxNativeZoom: 19,
+    cityNamesByDefault: false,
   },
 ];
 
@@ -175,8 +196,13 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
     writeStorage(STORAGE_DENSITY, density);
   };
 
+  // Fond Google indisponible (clé absente, API non activée…) : message et repli sur Plan IGN
+  const [googleError, setGoogleError] = useState<string | null>(null);
+  const showGoogle = !!baseLayer.google && !googleError;
+
   const chooseBaseLayer = (id: string) => {
     setBaseLayerId(id);
+    setGoogleError(null);
     writeStorage(STORAGE_BASE, id);
   };
 
@@ -223,6 +249,9 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
       <MapContainer
         center={[46.603354, 1.888334]}
         zoom={6}
+        // Fixé sur la carte : le fond Google n'existe qu'après l'ouverture de sa session,
+        // et le regroupement des marqueurs exige un zoom maximum dès le départ
+        maxZoom={19}
         // Zoom continu : la molette avance par fractions de niveau, sans crans
         zoomSnap={0}
         zoomDelta={0.5}
@@ -230,15 +259,19 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
         className="w-full h-full z-0"
         ref={setMap}
       >
-        {/* key : l'attribution d'une TileLayer n'est pas mise à jour, on la recrée */}
-        <TileLayer
-          key={baseLayer.id}
-          attribution={baseLayer.attribution}
-          url={baseLayer.url}
-          maxNativeZoom={baseLayer.maxNativeZoom}
-          maxZoom={19}
-          className={baseLayer.className}
-        />
+        {showGoogle ? (
+          <GoogleTiles type={baseLayer.google!} onError={setGoogleError} />
+        ) : (
+          /* key : l'attribution d'une TileLayer n'est pas mise à jour, on la recrée */
+          <TileLayer
+            key={baseLayer.id}
+            attribution={baseLayer.attribution}
+            url={baseLayer.url}
+            maxNativeZoom={baseLayer.maxNativeZoom}
+            maxZoom={19}
+            className={baseLayer.className}
+          />
+        )}
         {showAdminLimits && (
           <TileLayer
             attribution={`${IGN_ATTRIBUTION} – Limites administratives`}
@@ -400,6 +433,11 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
                   {layer.label}
                 </label>
               ))}
+              {baseLayer.google && googleError && (
+                <p className="text-[11px] text-red-600 leading-snug pt-1">
+                  Fond Google indisponible ({googleError}) : Plan IGN affiché.
+                </p>
+              )}
             </div>
 
             <label className="flex items-center gap-2 cursor-pointer pt-2 border-t border-gray-100">
