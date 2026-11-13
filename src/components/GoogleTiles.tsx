@@ -5,8 +5,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { TileLayer, useMap } from 'react-leaflet';
 
-// Seul le plan est servi en Europe (satellite refusé aux comptes de l'EEE)
-export type GoogleMapType = 'roadmap';
+// Variantes ouvertes par le relais (nginx.conf / vite.config.ts) : plan standard, plan épuré
+// (sans lieux ni transports), plan gris, relief. Le satellite est refusé aux comptes de l'EEE.
+export type GoogleMapType = 'roadmap' | 'epure' | 'gris' | 'terrain';
 
 const API = '/geo-membres/api/tiles';
 // Logo en couleurs, pour la bande claire des mentions de Leaflet
@@ -107,7 +108,8 @@ export default function GoogleTiles({ type, onError }: { type: GoogleMapType; on
     <TileLayer
       key={`${type}-${session}`}
       url={`${API}/{z}/{x}/{y}?session=${session}`}
-      maxNativeZoom={21}
+      // Le relief n'est détaillé que jusqu'au niveau 15 environ : agrandi au-delà
+      maxNativeZoom={type === 'terrain' ? 15 : 21}
       maxZoom={19}
     />
   );

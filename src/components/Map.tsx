@@ -26,7 +26,21 @@ interface BaseLayer {
   google?: GoogleMapType;
 }
 
+// Repli des fonds Google s'ils sont indisponibles (clé absente, quota…) : Plan IGN
+const PLAN_IGN_URL = `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`;
+const googleLayer = (id: string, label: string, google: GoogleMapType): BaseLayer => ({
+  id, label, google,
+  url: PLAN_IGN_URL, attribution: `${IGN_ATTRIBUTION} – Plan IGN`, maxNativeZoom: 19,
+  cityNamesByDefault: false,
+});
+
+// Le premier est le fond par défaut. Pas de satellite : Google ne le sert pas aux comptes
+// de l'Espace économique européen.
 const BASE_LAYERS: BaseLayer[] = [
+  googleLayer('google-plan', 'Google Maps', 'roadmap'),
+  googleLayer('google-epure', 'Google épuré', 'epure'),
+  googleLayer('google-gris', 'Google gris', 'gris'),
+  googleLayer('google-relief', 'Google relief', 'terrain'),
   {
     id: 'plan-ign', label: 'Plan IGN',
     url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
@@ -41,14 +55,6 @@ const BASE_LAYERS: BaseLayer[] = [
     attribution: 'Tuiles &copy; Esri – Esri, HERE, Garmin, OpenStreetMap', maxNativeZoom: 16,
     className: 'tiles-clair-colore',
     cityNamesByDefault: true,
-  },
-  // url / attribution : repli sur Plan IGN si le fond Google est indisponible.
-  // Pas de satellite : Google ne le sert pas aux comptes de l'Espace économique européen.
-  {
-    id: 'google-plan', label: 'Google Maps', google: 'roadmap',
-    url: `${IGN_WMTS}&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png`,
-    attribution: `${IGN_ATTRIBUTION} – Plan IGN`, maxNativeZoom: 19,
-    cityNamesByDefault: false,
   },
 ];
 
@@ -156,13 +162,14 @@ interface MapProps {
 }
 
 // Recadrage après import : pas plus près que l'échelle d'une ville (un seul point,
-// ou des points très proches), marge pour le bandeau du haut
+// ou des points très proches), marges pour le bandeau du haut et, quand il est déplié,
+// pour le panneau des calques en bas à gauche (w-56 + left-4 = 240 px)
 const FIT_MAX_ZOOM = 12;
-const FIT_OPTIONS: L.FitBoundsOptions = {
+const fitOptions = (layersPanelOpen: boolean): L.FitBoundsOptions => ({
   maxZoom: FIT_MAX_ZOOM,
-  paddingTopLeft: [40, 70],
+  paddingTopLeft: [layersPanelOpen ? 260 : 40, 70],
   paddingBottomRight: [40, 40],
-};
+});
 
 function MapEvents({ marker, setMarker }: { marker: MarkerState, setMarker: (m: MarkerState) => void }) {
   useMapEvents({
@@ -230,7 +237,10 @@ export default function Map({ members, organisms, orgRadius, organismStats, mark
       if (p.lat !== undefined && p.lng !== undefined) points.push([p.lat, p.lng]);
     }
     if (points.length === 0) return;
-    map.fitBounds(L.latLngBounds(points), FIT_OPTIONS);
+    // Taille remesurée : celle que Leaflet garde en mémoire peut dater (fenêtre masquée
+    // ou redimensionnée), et un cadrage calculé dessus tombe à côté
+    map.invalidateSize();
+    map.fitBounds(L.latLngBounds(points), fitOptions(!layersCollapsed));
     // Volontairement limité à fitRequest : les membres sont déjà à jour quand il change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitRequest, map]);

@@ -7,8 +7,23 @@ import {defineConfig, loadEnv, type Plugin} from 'vite';
 // dans .env.local et n'est ajoutée qu'aux requêtes vers Google, jamais journalisée.
 // Sans clé, les routes répondent 503 et l'application se rabat sur Nominatim / Plan IGN.
 function googleRelay(key: string | undefined): Plugin {
-  // Plan routier en français (le satellite est refusé aux comptes de l'EEE)
-  const SESSION_BODY = { mapType: 'roadmap', language: 'fr-FR', region: 'FR' };
+  // Variantes de fond Google, en français : mêmes réglages que la map
+  // $google_tiles_session de nginx.conf (le satellite est refusé aux comptes de l'EEE)
+  const base = { mapType: 'roadmap', language: 'fr-FR', region: 'FR' };
+  const SESSION_BODIES: Record<string, object> = {
+    roadmap: base,
+    epure: { ...base, styles: [
+      { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+      { featureType: 'poi.park', elementType: 'geometry', stylers: [{ visibility: 'on' }] },
+      { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+    ] },
+    gris: { ...base, styles: [
+      { stylers: [{ saturation: -100 }] },
+      { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+      { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+    ] },
+    terrain: { ...base, mapType: 'terrain', layerTypes: ['layerRoadmap'] },
+  };
 
   return {
     name: 'google-relay',
@@ -34,7 +49,7 @@ function googleRelay(key: string | undefined): Plugin {
           init = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(SESSION_BODY),
+            body: JSON.stringify(SESSION_BODIES[q.get('type') || ''] || SESSION_BODIES.roadmap),
           };
         } else if (url.pathname === '/tiles/viewport') {
           const out = new URLSearchParams();
