@@ -35,7 +35,7 @@ function persist() {
   }
 }
 
-let lastRequestAt = 0;
+let nextSlotAt = 0;
 
 function wait(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -57,9 +57,11 @@ async function search(params: Record<string, string>, country: CountryRef, signa
   if (country.code) query.set('countrycodes', country.code);
   else query.set('country', country.label);
 
-  const elapsed = Date.now() - lastRequestAt;
-  if (elapsed < MIN_INTERVAL_MS) await wait(MIN_INTERVAL_MS - elapsed, signal);
-  lastRequestAt = Date.now();
+  // Créneau réservé avant d'attendre : reste à 1 requête/s même avec des appels simultanés
+  const now = Date.now();
+  const slot = Math.max(now, nextSlotAt);
+  nextSlotAt = slot + MIN_INTERVAL_MS;
+  if (slot > now) await wait(slot - now, signal);
 
   let response: Response;
   try {

@@ -18,7 +18,13 @@ FROM mirror.gcr.io/library/nginx:1.30.5-alpine-slim@sha256:32463212baf0e7d91aded
 
 # Configuration complète : pid et fichiers temporaires dans /tmp (sans root, lecture seule).
 COPY nginx.conf /etc/nginx/nginx.conf
-RUN rm -f /etc/nginx/conf.d/default.conf && nginx -t
+COPY start.sh /start.sh
+# Certificats racine pour vérifier maps.googleapis.com (relais de géocodage).
+# Le fichier de clé n'existe qu'à l'exécution : un fichier vide sert au test de syntaxe.
+RUN apk add --no-cache ca-certificates \
+ && sed -i 's/\r$//' /start.sh && chmod 755 /start.sh \
+ && rm -f /etc/nginx/conf.d/default.conf \
+ && printf 'set $google_key "";\n' > /tmp/google-key.conf && nginx -t && rm /tmp/google-key.conf
 
 # L'arborescence reproduit le préfixe d'URL : pas de StripPrefix côté Traefik.
 COPY --from=build /src/dist/ /usr/share/nginx/html/geo-membres/
@@ -29,6 +35,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/geo-membres/ || exit 1
 
 # Les scripts d'entrée de l'image officielle réécrivent la configuration, ce que le
-# système de fichiers en lecture seule interdit : nginx est lancé directement.
+# système de fichiers en lecture seule interdit : start.sh écrit seulement la clé
+# Google dans /tmp, puis lance nginx.
 ENTRYPOINT []
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/start.sh"]

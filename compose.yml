@@ -2,7 +2,8 @@
 # est extrait dans ./app (skill VM-interne-tool), et ce fichier est copié à la racine
 # de la stack au déploiement.
 #
-# Un conteneur de fichiers statiques : ni clé, ni secret, ni volume de données.
+# Un conteneur de fichiers statiques, sans volume de données. Seul secret : la clé
+# Google du relais de géocodage, dans le .env de la stack.
 # La racine d'app.omonville.fgl reste au Catalogue (règle Host() nue).
 
 name: geo-membres
@@ -22,6 +23,11 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=8m,mode=1777
+
+    # Clé du relais de géocodage Google, lue dans ~/stacks/geo-membres/.env (chmod 600).
+    # Absente : le relais répond 503 et l'application se rabat sur Nominatim.
+    environment:
+      GOOGLE_MAPS_KEY: ${GOOGLE_MAPS_KEY:-}
 
     mem_limit: 32m
     # Aucun `ports:` publié : joignable uniquement par Traefik.

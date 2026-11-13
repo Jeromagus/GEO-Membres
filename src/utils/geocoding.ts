@@ -1,6 +1,35 @@
 import Papa from 'papaparse';
-import { resolveCountry } from './country';
-import { geocodeForeign } from './nominatim';
+import { CountryRef, prepareForeign, resolveCountry } from './country';
+import { geocodeForeign, ForeignHit } from './nominatim';
+import { geocodeGoogle } from './google';
+
+// Adresse hors de France : nettoyée, puis Google (par le relais du serveur), ou Nominatim
+// si le relais n'est pas disponible. Renvoie aussi le pays retenu (il peut être lu dans la ville).
+async function locateForeign(
+  postalCode: string,
+  city: string,
+  declared: CountryRef,
+  signal: AbortSignal
+): Promise<{ hit: ForeignHit | null; country: CountryRef; city: string; postalCode: string }> {
+  const prepared = prepareForeign(postalCode, city, declared);
+  let hit = await geocodeGoogle(prepared.postalCode, prepared.city, prepared.country, signal);
+  if (hit === undefined) {
+    hit = await geocodeForeign(prepared.postalCode, prepared.city, prepared.country, signal);
+  }
+  return { hit, ...prepared };
+}
+
+// Exécute les tâches avec au plus `size` en cours à la fois
+async function runPool<T>(items: T[], size: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await worker(item);
+    }
+  });
+  await Promise.all(lanes);
+}
 
 export interface ImportRow {
   index: number;
@@ -48,9 +77,10 @@ export async function geocodeOne(
         };
       }
     } else {
-      const hit = await geocodeForeign(corrected.postalCode, corrected.city, country, signal);
-      if (hit) {
-        return { ...row, postalCode: hit.postalCode, city: hit.city, country: country.label, lat: hit.lat, lng: hit.lng, valid: true };
+      const found = await locateForeign(corrected.postalCode, corrected.city, country, signal);
+      if (found.hit) {
+        const { hit } = found;
+        return { ...row, postalCode: hit.postalCode, city: hit.city, country: found.country.label, lat: hit.lat, lng: hit.lng, valid: true };
       }
     }
   } catch (err: any) {
@@ -251,20 +281,22 @@ export async function geocodeInChunks(
     }
   }
 
-  for (const row of foreignRows) {
+  // Hors de France : plusieurs recherches à la fois (Google). Les adresses introuvables ne
+  // bloquent pas l'import : elles restent invalides, à reprendre par « Corriger les invalides ».
+  await runPool(foreignRows, 8, async (row) => {
     if (signal.aborted) throw new Error('Aborted');
-    const hit = await geocodeForeign(row.postalCode, row.city, countryOf.get(row.index)!, signal);
+    const found = await locateForeign(row.postalCode, row.city, countryOf.get(row.index)!, signal);
 
-    if (hit) {
-      results.push({ ...row, postalCode: hit.postalCode, city: hit.city, lat: hit.lat, lng: hit.lng, valid: true });
+    if (found.hit) {
+      const { hit } = found;
+      results.push({ ...row, postalCode: hit.postalCode, city: hit.city, country: found.country.label, lat: hit.lat, lng: hit.lng, valid: true });
     } else {
-      const corrected = await onResolve(row);
-      results.push(corrected ? await geocodeOne(row, corrected, signal) : { ...row, valid: false });
+      results.push({ ...row, postalCode: found.postalCode, city: found.city, country: found.country.label, valid: false });
     }
 
     processed++;
     onProgress(processed);
-  }
+  });
 
   return results;
 }
