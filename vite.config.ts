@@ -9,7 +9,9 @@ import {defineConfig, loadEnv, type Plugin} from 'vite';
 function googleRelay(key: string | undefined): Plugin {
   // Variantes de fond Google, en français : mêmes réglages que la map
   // $google_tiles_session de nginx.conf (le satellite est refusé aux comptes de l'EEE)
-  const base = { mapType: 'roadmap', language: 'fr-FR', region: 'FR' };
+  // scaleFactor2x + highDpi : tuiles de 512 px (même contenu, deux fois plus de pixels),
+  // nettes quand le zoom progressif les agrandit entre deux niveaux
+  const base = { mapType: 'roadmap', language: 'fr-FR', region: 'FR', scale: 'scaleFactor2x', highDpi: true };
   const SESSION_BODIES: Record<string, object> = {
     roadmap: base,
     epure: { ...base, styles: [

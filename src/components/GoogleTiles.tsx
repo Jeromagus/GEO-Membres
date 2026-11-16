@@ -3,7 +3,8 @@
 // les mentions de droits de la zone visible et le logo Google sont affichés (obligatoires).
 
 import { useEffect, useRef, useState } from 'react';
-import { TileLayer, useMap } from 'react-leaflet';
+import { useMap } from 'react-leaflet';
+import L from 'leaflet';
 
 // Variantes ouvertes par le relais (nginx.conf / vite.config.ts) : plan standard, plan épuré
 // (sans lieux ni transports), plan gris, relief. Le satellite est refusé aux comptes de l'EEE.
@@ -15,7 +16,25 @@ const GOOGLE_LOGO = '<img src="https://maps.gstatic.com/mapfiles/api-3/images/go
 // Une session dure environ deux semaines : on la renouvelle un jour avant
 const RENEW_MARGIN_S = 24 * 3600;
 
-const storageKey = (type: GoogleMapType) => `geo-membres:google-session:${type}`;
+// v2 : sessions en tuiles haute définition (scaleFactor2x + highDpi), à rouvrir
+const storageKey = (type: GoogleMapType) => `geo-membres:google-session:v2:${type}`;
+
+// Zoom progressif. Google ne dessine que des niveaux entiers : entre deux, Leaflet agrandit
+// ou réduit les tuiles du niveau le plus proche (bascule à +0,5). Réduites de 30 %, les noms
+// deviennent illisibles ; agrandies de 41 %, la carte est floue. Ici, la bascule se fait à +0,7 :
+// les tuiles ne sont jamais réduites sous 81 %, et leur agrandissement (jusqu'à 162 %) reste net
+// grâce aux tuiles haute définition (512 px affichées sur 256).
+const SWITCH_AT = 0.7;
+
+const ProgressiveTileLayer = L.TileLayer.extend({
+  _setView(this: any, center: L.LatLng, zoom: number, noPrune?: boolean, noUpdate?: boolean) {
+    // Leaflet prend Math.round(zoom) comme niveau de tuiles : on lui passe le niveau voulu,
+    // puis on rétablit l'échelle d'affichage du zoom réel
+    const level = Math.floor(zoom + 1 - SWITCH_AT);
+    (L.TileLayer.prototype as any)._setView.call(this, center, level, noPrune, noUpdate);
+    if (level !== zoom) this._setZoomTransforms(center, zoom);
+  },
+});
 
 async function getSession(type: GoogleMapType, signal: AbortSignal): Promise<string> {
   try {
@@ -103,14 +122,18 @@ export default function GoogleTiles({ type, onError }: { type: GoogleMapType; on
     };
   }, [map, session]);
 
-  if (!session) return null;
-  return (
-    <TileLayer
-      key={`${type}-${session}`}
-      url={`${API}/{z}/{x}/{y}?session=${session}`}
+  useEffect(() => {
+    if (!session) return;
+    const layer = new (ProgressiveTileLayer as any)(`${API}/{z}/{x}/{y}?session=${session}`, {
       // Le relief n'est détaillé que jusqu'au niveau 15 environ : agrandi au-delà
-      maxNativeZoom={type === 'terrain' ? 15 : 21}
-      maxZoom={19}
-    />
-  );
+      maxNativeZoom: type === 'terrain' ? 15 : 21,
+      maxZoom: 19,
+    }) as L.TileLayer;
+    layer.addTo(map);
+    return () => {
+      layer.remove();
+    };
+  }, [map, session, type]);
+
+  return null;
 }
