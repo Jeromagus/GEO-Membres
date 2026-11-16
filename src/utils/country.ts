@@ -132,6 +132,12 @@ const CA_PROVINCES = new Set([
   'yt', 'yukon', 'nt', 'tno', 'nu', 'nunavut',
 ]);
 
+// Mots qui lient un nom de lieu à ce qui suit (le mot suivant n'est alors pas un pays)
+const PLACE_LINKS = new Set([
+  'saint', 'st', 'sainte', 'ste', 'san', 'santa', 'santo', 'sao', 'sankt', 'sint',
+  'le', 'la', 'les', 'l', 'de', 'du', 'des', 'd', 'sur', 'sous', 'en', 'lez', 'les', 'aux', 'au', 'am', 'an', 'im', 'bei', 'port', 'fort',
+]);
+
 const CA_POSTCODE_LOOSE = /([A-Z])\s*([0-9O])\s*([A-Z])\s*([0-9O])\s*([A-Z])\s*([0-9O])/;
 
 export interface PreparedAddress {
@@ -146,9 +152,11 @@ export interface PreparedAddress {
 export function prepareForeign(postalCode: string, city: string, country: CountryRef): PreparedAddress {
   let words = city.replace(/[.,;]/g, ' ').replace(/\s+-\s+/g, ' ').trim().split(/\s+/).filter(Boolean);
 
-  // Pays en fin de ville, s'il diffère du pays déclaré
+  // Pays en fin de ville, s'il diffère du pays déclaré. Pas après « Saint », « sur », « de »… :
+  // c'est alors une partie du nom (« SAINT MAURICE » en Suisse n'est pas l'île Maurice)
   for (let n = Math.min(3, words.length - 1); n >= 1; n--) {
     const code = COUNTRY_NAMES.get(normalize(words.slice(-n).join(' ')));
+    if (code && PLACE_LINKS.has(normalize(words[words.length - n - 1]))) continue;
     if (code) {
       if (code !== country.code) {
         country = code === 'fr' ? { code, label: 'France', isFrance: true } : { code, label: labelFor(code), isFrance: false };

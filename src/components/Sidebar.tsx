@@ -1,10 +1,9 @@
 import React, { useRef, useState, useMemo, useEffect } from 'react';
-import { Upload, MapPin, Settings2, Users, FileSpreadsheet, AlertCircle, Edit3, Building2, ChevronDown, ChevronRight } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import Papa from 'papaparse';
+import { Upload, MapPin, Settings2, Users, FileSpreadsheet, AlertCircle, Edit3, Building2, ChevronDown, ChevronRight, ScrollText, Download } from 'lucide-react';
 import { Member, MarkerState, Organism, OrganismRadiusState } from '../types';
 import { geocodeInChunks, geocodeOne, Correction, GeocodeResult, ImportRow } from '../utils/geocoding';
 import { foreignCountryLabel, resolveCountry } from '../utils/country';
+import { cell, ColumnMapping, columnLetter, FIELD_HINTS, FIELD_LABELS, fieldsFor, guessMapping, mappingProblem, readTable, Table } from '../utils/columns';
 
 export interface OrganismStats {
   // Nombre de membres à moins du rayon d'attractivité, par id d'organisme
@@ -37,18 +36,288 @@ export interface OrganismInRadius {
 
 type ImportKind = 'members' | 'organisms';
 
+// Une ligne du fichier : la saisie d'origine et ce qu'elle est devenue
+interface LogEntry {
+  input: ImportRow;
+  result: GeocodeResult;
+}
+
 interface ImportResults {
   valid: number;
   invalid: number;
   invalidData: GeocodeResult[];
+  // Journal de l'import : toutes les lignes lues, placées ou non, avec la raison des rejets
+  log: LogEntry[];
+  fileName: string;
+  date: Date;
+  mappingSummary: string;
 }
 
-// Colonnes attendues : CP,VILLE,PAYS (membres) ; TYPE,NOM,CP,VILLE,PAYS (organismes).
-// PAYS vide = France.
-const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; cpColumn: number; entity: string }> = {
-  members: { label: 'Importer Membres', columns: 'CP,VILLE,PAYS', cpColumn: 0, entity: 'membres' },
-  organisms: { label: 'Importer Organismes', columns: 'TYPE,NOM,CP,VILLE,PAYS', cpColumn: 2, entity: 'organismes' },
+interface StagedFile {
+  file: File;
+  kind: ImportKind;
+  table: Table;
+  mapping: ColumnMapping;
+  hasHeader: boolean;
+}
+
+// Colonnes habituelles : CP,VILLE,PAYS (membres) ; TYPE,NOM,CP,VILLE,PAYS (organismes).
+// PAYS vide = France. L'ordre réel est confirmé à chaque import (correspondance des colonnes).
+const IMPORT_CONFIG: Record<ImportKind, { label: string; columns: string; entity: string }> = {
+  members: { label: 'Importer Membres', columns: 'CP,VILLE,PAYS', entity: 'membres' },
+  organisms: { label: 'Importer Organismes', columns: 'TYPE,NOM,CP,VILLE,PAYS', entity: 'organismes' },
 };
+
+function logStatus(e: LogEntry): string {
+  if (!e.result.valid) return 'rejetée';
+  return e.result.original || e.result.reason ? 'corrigée' : 'placée';
+}
+
+function describeMapping(staged: StagedFile): string {
+  const parts = fieldsFor(staged.kind).map(f => {
+    const col = staged.mapping[f];
+    const head = staged.hasHeader && col !== null ? staged.table.rows[0]?.[col] : '';
+    return `${FIELD_LABELS[f]} = ${col === null ? 'aucune' : `${columnLetter(col)}${head ? ` (${head})` : ''}`}`;
+  });
+  return `Colonnes : ${parts.join(', ')} ; ${staged.hasHeader ? 'ligne 1 = intitulés' : 'sans ligne d\'intitulés'}`;
+}
+
+// Journal au format CSV pour Excel (séparateur ;, BOM UTF-8)
+function downloadLog(results: ImportResults, kind: ImportKind) {
+  const withOrg = kind === 'organisms';
+  const header = ['Ligne', 'Statut', ...(withOrg ? ['Type', 'Nom'] : []), 'CP saisi', 'Ville saisie', 'Pays saisi',
+    'CP retenu', 'Ville retenue', 'Pays retenu', 'Latitude', 'Longitude', 'Service', 'Raison / correction'];
+  const esc = (v: unknown) => {
+    const t = v === undefined || v === null ? '' : String(v);
+    return /[;"\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const lines = results.log.map(e => [
+    e.input.index, logStatus(e), ...(withOrg ? [e.input.type, e.input.name] : []),
+    e.input.postalCode, e.input.city, e.input.country,
+    e.result.valid ? e.result.postalCode : '', e.result.valid ? e.result.city : '', e.result.valid ? e.result.country : '',
+    e.result.lat !== undefined ? String(e.result.lat).replace('.', ',') : '',
+    e.result.lng !== undefined ? String(e.result.lng).replace('.', ',') : '',
+    e.result.source, e.result.reason,
+  ].map(esc).join(';'));
+  const meta = esc(`Fichier : ${results.fileName} ; import du ${results.date.toLocaleString('fr-FR')} ; ${results.mappingSummary}`);
+  const blob = new Blob(['﻿' + [meta, header.join(';'), ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const base = results.fileName.replace(/\.[^.]+$/, '');
+  const d = results.date;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  a.href = url;
+  a.download = `journal-import-${base}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Correspondance des colonnes du fichier avec les données attendues, avant l'analyse
+function ColumnMappingModal({ staged, onChange, notice, onCancel, onConfirm }: {
+  staged: StagedFile;
+  onChange: (next: StagedFile) => void;
+  notice?: React.ReactNode;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { table, mapping, hasHeader, kind, file } = staged;
+  const fields = fieldsFor(kind);
+  const headerRow = table.rows[0] || [];
+  const dataRows = table.rows.slice(hasHeader ? 1 : 0);
+  const columns = Array.from({ length: table.width }, (_, i) => i);
+  const problem = mappingProblem(mapping);
+
+  const columnName = (col: number) => {
+    const head = hasHeader ? headerRow[col] : '';
+    const example = dataRows.find(r => (r[col] ?? '') !== '')?.[col] ?? '';
+    return `${columnLetter(col)}${head ? ` · ${head}` : ''}${example ? ` (ex. ${example.slice(0, 24)})` : ''}`;
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in zoom-in-95 duration-200">
+        <h3 className="text-lg font-bold text-gray-900 mb-1">Correspondance des colonnes</h3>
+        <p className="text-sm text-gray-600 mb-4">
+          <span className="font-semibold text-gray-900">{file.name}</span> ({IMPORT_CONFIG[kind].entity}) :
+          {' '}{dataRows.length} ligne{dataRows.length > 1 ? 's' : ''}, {table.width} colonne{table.width > 1 ? 's' : ''}{table.sheetName ? `, feuille « ${table.sheetName} »` : ''}.
+          {' '}Vérifiez quelle colonne contient quelle donnée.
+        </p>
+
+        <label className="flex items-center gap-2 text-sm text-gray-700 mb-4 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={hasHeader}
+            onChange={(e) => onChange({ ...staged, hasHeader: e.target.checked })}
+            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+          />
+          La première ligne contient les intitulés (elle ne sera pas importée)
+        </label>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          {fields.map(field => (
+            <div key={field}>
+              <label htmlFor={`map-${field}`} className="block text-xs font-medium text-gray-700 mb-1">
+                {FIELD_LABELS[field]}
+                {FIELD_HINTS[field] && <span className="font-normal text-gray-400"> ({FIELD_HINTS[field]})</span>}
+              </label>
+              <select
+                id={`map-${field}`}
+                value={mapping[field] ?? ''}
+                onChange={(e) => onChange({ ...staged, mapping: { ...mapping, [field]: e.target.value === '' ? null : Number(e.target.value) } })}
+                className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              >
+                <option value="">— aucune —</option>
+                {columns.map(col => <option key={col} value={col}>{columnName(col)}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Aperçu des premières lignes</p>
+          <div className="overflow-x-auto border border-gray-200 rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-2 py-1.5 text-left font-medium">Ligne</th>
+                  {fields.map(f => <th key={f} className="px-2 py-1.5 text-left font-medium">{FIELD_LABELS[f]}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {dataRows.slice(0, 4).map((row, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-2 py-1 text-gray-400">{i + (hasHeader ? 2 : 1)}</td>
+                    {fields.map(f => {
+                      const v = cell(row, mapping[f]);
+                      const fallback = f === 'country' ? 'France' : f === 'name' ? cell(row, mapping.city) : '';
+                      return (
+                        <td key={f} className={`px-2 py-1 ${v ? 'text-gray-900' : 'text-gray-400 italic'}`}>
+                          {v || fallback || '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {notice}
+
+        {problem && (
+          <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 p-3 rounded-lg mb-4">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <p>{problem}</p>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!!problem}
+            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
+          >
+            Débuter l'importation
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Journal du dernier import : lignes rejetées ou corrigées, avec la raison
+function ImportLogModal({ results, kind, onClose }: { results: ImportResults; kind: ImportKind; onClose: () => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const rejected = results.log.filter(e => !e.result.valid);
+  const corrected = results.log.filter(e => logStatus(e) === 'corrigée');
+  const shown = showAll ? results.log : results.log.filter(e => logStatus(e) !== 'placée');
+  const statusClass: Record<string, string> = {
+    'rejetée': 'bg-red-100 text-red-800',
+    'corrigée': 'bg-amber-100 text-amber-800',
+    'placée': 'bg-emerald-100 text-emerald-800',
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
+        <h3 className="text-lg font-bold text-gray-900 mb-1">Journal d'import ({IMPORT_CONFIG[kind].entity})</h3>
+        <p className="text-sm text-gray-600 mb-1">
+          <span className="font-semibold text-gray-900">{results.fileName}</span>, le {results.date.toLocaleString('fr-FR')} :
+          {' '}{results.log.length} lignes lues, {results.log.length - rejected.length} placées
+          {corrected.length > 0 && ` (dont ${corrected.length} corrigées)`}, {rejected.length} rejetées.
+        </p>
+        <p className="text-xs text-gray-500 mb-3">{results.mappingSummary}</p>
+
+        <label className="flex items-center gap-2 text-xs text-gray-600 mb-2 cursor-pointer">
+          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} className="rounded border-gray-300" />
+          Afficher aussi les lignes placées sans correction
+        </label>
+
+        <div className="flex-1 min-h-0 overflow-auto border border-gray-200 rounded-lg custom-scrollbar">
+          {shown.length === 0 ? (
+            <p className="text-sm text-gray-500 text-center py-8">Toutes les lignes ont été placées sans correction.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-600 sticky top-0">
+                <tr>
+                  <th className="px-2 py-1.5 text-left font-medium">Ligne</th>
+                  <th className="px-2 py-1.5 text-left font-medium">Statut</th>
+                  <th className="px-2 py-1.5 text-left font-medium">Saisie</th>
+                  <th className="px-2 py-1.5 text-left font-medium">Raison / correction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(e => {
+                  const status = logStatus(e);
+                  return (
+                    <tr key={e.input.index} className="border-t border-gray-100 align-top">
+                      <td className="px-2 py-1.5 text-gray-500">{e.input.index}</td>
+                      <td className="px-2 py-1.5"><span className={`px-1.5 py-0.5 rounded font-medium ${statusClass[status]}`}>{status}</span></td>
+                      <td className="px-2 py-1.5 text-gray-900">
+                        {kind === 'organisms' && (e.input.type || e.input.name) && <span className="block text-gray-500">{[e.input.type, e.input.name].filter(Boolean).join(' · ')}</span>}
+                        {[e.input.postalCode, e.input.city].filter(Boolean).join(' ') || <span className="italic text-gray-400">vide</span>}
+                        {e.input.country && <span className="text-gray-500"> · {e.input.country}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-gray-700">
+                        {e.result.reason || (e.result.valid ? `placée par ${e.result.source || '?'}` : 'introuvable')}
+                        {e.result.valid && e.result.original && <span className="block text-gray-500">→ {e.result.postalCode} {e.result.city}</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 mt-4">
+          <button
+            onClick={() => downloadLog(results, kind)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Télécharger le journal (.csv)
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Bornes du rayon d'attractivité (km), communes au curseur et au champ de saisie
 const ORG_RADIUS_MIN = 1;
@@ -67,13 +336,15 @@ function toOrganism(g: GeocodeResult, id: string): Organism {
   };
 }
 
-function ResolutionModal({ 
-  row, 
-  initialOptions, 
-  onResolve 
-}: { 
-  row: { index: number; postalCode: string; city: string; country: string }; 
-  initialOptions: string[]; 
+function ResolutionModal({
+  row,
+  reason,
+  initialOptions,
+  onResolve
+}: {
+  row: { index: number; postalCode: string; city: string; country: string };
+  reason?: string;
+  initialOptions: string[];
   onResolve: (result: Correction | null) => void
 }) {
   const [postalCode, setPostalCode] = useState(row.postalCode);
@@ -106,6 +377,9 @@ function ResolutionModal({
         <p className="text-sm text-gray-600 mb-4">
           Ligne {row.index} : la combinaison Code Postal / Ville / Pays n'a pas été trouvée.
         </p>
+        {reason && (
+          <p className="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 mb-4">Raison : {reason}</p>
+        )}
         
         <div className="space-y-4 mb-6">
           <div className="flex gap-3">
@@ -340,11 +614,13 @@ export default function Sidebar({
   const reimportInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [draggingKind, setDraggingKind] = useState<ImportKind | null>(null);
-  const [stagedFile, setStagedFile] = useState<{ file: File; kind: ImportKind } | null>(null);
+  const [stagedFile, setStagedFile] = useState<StagedFile | null>(null);
   const [isReimporting, setIsReimporting] = useState(false);
+  const [logKind, setLogKind] = useState<ImportKind | null>(null);
 
   const [resolvingRow, setResolvingRow] = useState<{
     row: ImportRow;
+    reason?: string;
     options: string[];
     resolve: (value: Correction | null) => void;
   } | null>(null);
@@ -379,11 +655,25 @@ export default function Sidebar({
       const rowToCorrect = invalidData[nextIndex];
 
       // Open the resolution modal for this row
-      handleResolveRequest(rowToCorrect).then(async (result) => {
+      handleResolveRequest(rowToCorrect, rowToCorrect.reason).then(async (result) => {
         if (result) {
           // Attempt to geocode the corrected result
           try {
             const corrected = await geocodeOne(rowToCorrect, result, new AbortController().signal);
+            const updateLog = (log: LogEntry[]) => log.map(e => e.input.index !== rowToCorrect.index ? e : {
+              ...e,
+              result: corrected.valid
+                ? { ...corrected, reason: `${rowToCorrect.reason || 'introuvable'} → corrigée à la main` }
+                : { ...rowToCorrect, reason: `${rowToCorrect.reason || 'introuvable'} ; ${corrected.reason}` },
+            });
+
+            if (!corrected.valid) {
+              setImportState(prev => {
+                const current = prev.results[kind];
+                if (!current) return prev;
+                return { ...prev, results: { ...prev.results, [kind]: { ...current, log: updateLog(current.log) } } };
+              });
+            }
 
             if (corrected.valid) {
               const id = `${kind}-${Date.now()}-${rowToCorrect.index}`;
@@ -402,7 +692,13 @@ export default function Sidebar({
                   ...prev,
                   results: {
                     ...prev.results,
-                    [kind]: { ...current, valid: current.valid + 1, invalid: current.invalid - 1 }
+                    [kind]: {
+                      ...current,
+                      valid: current.valid + 1,
+                      invalid: current.invalid - 1,
+                      invalidData: current.invalidData.filter(r => r.index !== rowToCorrect.index),
+                      log: updateLog(current.log),
+                    }
                   }
                 };
               });
@@ -444,20 +740,29 @@ export default function Sidebar({
     );
   }, [organisms, organismStats]);
 
+  // Lecture du fichier et correspondance des colonnes devinée, soumise ensuite à l'utilisateur
+  const stageFile = async (file: File, kind: ImportKind, reimport: boolean) => {
+    setError(null);
+    try {
+      const table = await readTable(file);
+      const guess = guessMapping(table, kind);
+      setIsReimporting(reimport);
+      setStagedFile({ file, kind, table, mapping: guess.mapping, hasHeader: guess.hasHeader });
+    } catch (err: any) {
+      console.error('Lecture du fichier impossible :', err);
+      setError(`Lecture de « ${file.name} » impossible : ${err.message || err}`);
+      resetFileInputs();
+    }
+  };
+
   const handleFileSelect = (kind: ImportKind) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setIsReimporting(false);
-      setStagedFile({ file, kind });
-    }
+    if (file) stageFile(file, kind, false);
   };
 
   const handleReimportSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setIsReimporting(true);
-      setStagedFile({ file, kind: 'members' });
-    }
+    if (file) stageFile(file, 'members', true);
   };
 
   const handleDragOver = (kind: ImportKind) => (e: React.DragEvent) => {
@@ -476,35 +781,34 @@ export default function Sidebar({
     const file = e.dataTransfer.files?.[0];
     const name = file?.name.toLowerCase() || '';
     if (file && (name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls'))) {
-      setIsReimporting(false);
-      setStagedFile({ file, kind });
+      stageFile(file, kind, false);
     } else {
       setError('Format de fichier non supporté. Utilisez .csv ou .xlsx');
     }
   };
 
-  const handleResolveRequest = async (row: ImportRow) => {
+  const handleResolveRequest = async (row: ImportRow, reason?: string) => {
     return new Promise<Correction | null>(async (resolve) => {
       let options: string[] = [];
-      // Suggestions de communes : France uniquement
-      if (resolveCountry(row.country, row.postalCode).isFrance) try {
-        const res = await fetch(`https://geo.api.gouv.fr/communes?codePostal=${row.postalCode}&fields=nom&format=json`);
+      // Suggestions de communes : France uniquement, et sans attendre plus de 8 s
+      if (resolveCountry(row.country, row.postalCode).isFrance && /^\d{5}$/.test(row.postalCode)) try {
+        const res = await fetch(`https://geo.api.gouv.fr/communes?codePostal=${row.postalCode}&fields=nom&format=json`, { signal: AbortSignal.timeout(8000) });
         if (res.ok) {
           const data = await res.json();
-          options = data.map((d: any) => d.nom);
+          if (Array.isArray(data)) options = data.map((d: any) => d.nom);
         }
       } catch (err) {
-        console.error(err);
+        console.error('Suggestions de communes indisponibles :', err);
       }
 
-      setResolvingRow({ row, options, resolve });
+      setResolvingRow({ row, reason, options, resolve });
     });
   };
 
   const confirmImport = async () => {
     if (!stagedFile) return;
-    const { file, kind } = stagedFile;
-    const { cpColumn } = IMPORT_CONFIG[kind];
+    const staged = stagedFile;
+    const { file, kind, table, mapping, hasHeader } = staged;
     const appending = isReimporting;
     setStagedFile(null);
     setError(null);
@@ -518,63 +822,44 @@ export default function Sidebar({
       results: { ...prev.results, [kind]: appending ? prev.results[kind] : null }
     }));
 
+    const startedAt = new Date();
+    const mappingSummary = describeMapping(staged);
+    // Lignes lues : saisie d'origine (avant tout nettoyage), pour le journal
+    const inputs: ImportRow[] = [];
+    const skipped: GeocodeResult[] = [];
+
     try {
-      let rawData: any[][] = [];
-      const fileName = file.name.toLowerCase();
-
-      if (fileName.endsWith('.csv')) {
-        const text = await file.text();
-        const result = Papa.parse(text, { header: false, skipEmptyLines: true });
-        rawData = result.data as any[][];
-      } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-      } else {
-        throw new Error('Format de fichier non supporté. Utilisez .csv ou .xlsx');
-      }
-
-      if (rawData.length === 0) {
-        throw new Error('Le fichier est vide.');
-      }
-
-      // Ligne d'en-tête : intitulés reconnus, ou code postal sans aucun chiffre
-      // (un code étranger peut contenir des lettres, ex. H2X 1Y4)
-      const HEADER_CELL = /^(cp|code|code[\s_-]*postal|zip|postcode|ville|city|commune|localit[eé]|pays|country|type|nom|name)$/i;
-      const firstRow = rawData[0] || [];
-      const firstCells = [0, 1, 2].map(k => String(firstRow[cpColumn + k] ?? '').trim());
-      const isHeader = firstCells.some(c => HEADER_CELL.test(c)) || (firstCells[0] !== '' && !/\d/.test(firstCells[0]));
-      const startIndex = isHeader ? 1 : 0;
-
+      const startIndex = hasHeader ? 1 : 0;
       const rowsToProcess: ImportRow[] = [];
-      for (let i = startIndex; i < rawData.length; i++) {
-        const row = rawData[i];
-        if (!row || row.length === 0) continue;
+      for (let i = startIndex; i < table.rows.length; i++) {
+        const row = table.rows[i];
+        const country = cell(row, mapping.country);
+        const city = cell(row, mapping.city);
+        let cp = cell(row, mapping.postalCode);
 
-        let cp = String(row[cpColumn] || '').trim();
-        let city = String(row[cpColumn + 1] || '').trim();
-        let country = String(row[cpColumn + 2] || '').trim();
+        const importRow: ImportRow = { index: i + 1, postalCode: cp, city, country };
+        if (kind === 'organisms') {
+          importRow.type = cell(row, mapping.type);
+          importRow.name = cell(row, mapping.name) || city;
+        }
+        inputs.push({ ...importRow });
 
-        if (!cp && !city) continue;
+        if (!cp && !city) {
+          skipped.push({ ...importRow, valid: false, reason: 'ni code postal ni ville dans les colonnes choisies' });
+          continue;
+        }
 
         // Code postal français tronqué par le tableur (1000 → 01000), pas ailleurs :
         // la Belgique, la Suisse ou le Luxembourg ont des codes à 4 chiffres
         if (/^\d{1,4}$/.test(cp) && resolveCountry(country, cp).isFrance) {
           cp = cp.padStart(5, '0');
-        }
-
-        const importRow: ImportRow = { index: i + 1, postalCode: cp, city, country };
-        if (kind === 'organisms') {
-          importRow.type = String(row[0] || '').trim();
-          importRow.name = String(row[1] || '').trim();
+          importRow.postalCode = cp;
         }
         rowsToProcess.push(importRow);
       }
 
       if (rowsToProcess.length === 0) {
-        throw new Error('Aucune donnée valide trouvée dans le fichier.');
+        throw new Error('Aucune ligne avec un code postal ou une ville : vérifiez la correspondance des colonnes.');
       }
 
       setImportState(prev => ({
@@ -596,7 +881,19 @@ export default function Sidebar({
 
       const timestamp = Date.now();
       const validRows = geocoded.filter(g => g.valid);
-      const invalidRows = geocoded.filter(g => !g.valid);
+      const invalidRows = [...geocoded.filter(g => !g.valid), ...skipped].sort((a, b) => a.index - b.index);
+
+      // Journal : chaque ligne lue avec son résultat
+      const byIndex = new globalThis.Map<number, GeocodeResult>([...geocoded, ...skipped].map(g => [g.index, g]));
+      const log: LogEntry[] = inputs.map(input => ({
+        input,
+        result: byIndex.get(input.index) || { ...input, valid: false, reason: 'ligne perdue pendant l\'analyse' },
+      }));
+      if (invalidRows.length > 0) {
+        console.groupCollapsed(`GEO Membres : ${invalidRows.length} ligne(s) rejetée(s) dans ${file.name}`);
+        console.table(invalidRows.map(r => ({ ligne: r.index, cp: r.postalCode, ville: r.city, pays: r.country, service: r.source, raison: r.reason })));
+        console.groupEnd();
+      }
 
       if (kind === 'members') {
         const validMembers = validRows.map(g => toMember(g, `member-${timestamp}-${g.index}`));
@@ -614,17 +911,24 @@ export default function Sidebar({
           [kind]: {
             valid: (appending ? prev.results[kind]?.valid || 0 : 0) + validRows.length,
             invalid: invalidRows.length,
-            invalidData: invalidRows
+            invalidData: invalidRows,
+            log,
+            fileName: file.name,
+            date: startedAt,
+            mappingSummary,
           }
         }
       }));
+      // Des rejets : le journal s'ouvre de lui-même pour en donner les raisons
+      if (invalidRows.length > 0) setLogKind(kind);
 
       resetFileInputs();
     } catch (err: any) {
       if (err.message === 'Aborted') {
         setImportState(prev => ({ ...prev, isAnalyzing: false, showCancelConfirm: false }));
       } else {
-        setError(err.message || 'Erreur lors de l\'importation');
+        console.error(`GEO Membres : import de ${file.name} interrompu`, err);
+        setError(`Import de « ${file.name} » interrompu : ${err.message || err}`);
         setImportState(prev => ({ ...prev, isAnalyzing: false }));
       }
       resetFileInputs();
@@ -691,14 +995,26 @@ export default function Sidebar({
           className="hidden"
         />
 
-        {results && results.invalid > 0 && (
-          <button
-            onClick={() => startCorrection(kind)}
-            className="w-full flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-1.5 rounded-lg transition-colors"
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            Corriger les invalides ({results.invalid})
-          </button>
+        {results && (
+          <div className="flex gap-1.5">
+            {results.invalid > 0 && (
+              <button
+                onClick={() => startCorrection(kind)}
+                className="flex-1 flex items-center justify-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 py-1.5 rounded-lg transition-colors"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Corriger les invalides ({results.invalid})
+              </button>
+            )}
+            <button
+              onClick={() => setLogKind(kind)}
+              title="Lignes rejetées ou corrigées, avec la raison ; téléchargeable en CSV"
+              className={`flex items-center justify-center gap-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 py-1.5 px-3 rounded-lg transition-colors ${results.invalid > 0 ? '' : 'flex-1'}`}
+            >
+              <ScrollText className="w-3.5 h-3.5" />
+              Journal
+            </button>
+          </div>
         )}
       </div>
     );
@@ -930,8 +1246,9 @@ export default function Sidebar({
       </div>
 
       {resolvingRow && (
-        <ResolutionModal 
+        <ResolutionModal
           row={resolvingRow.row}
+          reason={resolvingRow.reason}
           initialOptions={resolvingRow.options}
           onResolve={(result) => {
             resolvingRow.resolve(result);
@@ -941,34 +1258,30 @@ export default function Sidebar({
       )}
 
       {stagedFile && !importState.isAnalyzing && !resolvingRow && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Confirmer l'importation</h3>
-            <p className="text-sm text-gray-600 mb-6">
-              Voulez-vous débuter l'analyse du fichier <span className="font-semibold text-gray-900">{stagedFile.file.name}</span> ({IMPORT_CONFIG[stagedFile.kind].entity}) ?
+        <ColumnMappingModal
+          staged={stagedFile}
+          onChange={setStagedFile}
+          notice={(stagedFile.kind === 'organisms' && organisms.length > 0) || isReimporting ? (
+            <p className="text-sm font-medium mb-4">
               {stagedFile.kind === 'organisms' && organisms.length > 0 && (
-                <span className="block mt-2 text-orange-700 font-medium">Les organismes déjà importés seront remplacés.</span>
+                <span className="block text-orange-700">Les organismes déjà importés seront remplacés.</span>
               )}
               {isReimporting && (
-                <span className="block mt-2 text-indigo-600 font-medium">Les membres valides seront ajoutés à la liste existante.</span>
+                <span className="block text-indigo-600">Les membres valides seront ajoutés à la liste existante.</span>
               )}
             </p>
-            <div className="flex justify-end gap-3">
-              <button 
-                onClick={() => { setStagedFile(null); resetFileInputs(); }}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                Annuler
-              </button>
-              <button 
-                onClick={confirmImport}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
-              >
-                Débuter l'importation
-              </button>
-            </div>
-          </div>
-        </div>
+          ) : undefined}
+          onCancel={() => { setStagedFile(null); resetFileInputs(); }}
+          onConfirm={confirmImport}
+        />
+      )}
+
+      {logKind && importState.results[logKind] && !importState.isAnalyzing && !resolvingRow && (
+        <ImportLogModal
+          results={importState.results[logKind]!}
+          kind={logKind}
+          onClose={() => setLogKind(null)}
+        />
       )}
 
       {importState.isAnalyzing && !resolvingRow && (

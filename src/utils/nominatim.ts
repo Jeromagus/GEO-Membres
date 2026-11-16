@@ -3,10 +3,12 @@
 // https://operations.osmfoundation.org/policies/nominatim/
 
 import { CountryRef } from './country';
+import { Diag, describeError, fetchWithTimeout, wait } from './net';
 
 const ENDPOINT = 'https://nominatim.openstreetmap.org/search';
 const MIN_INTERVAL_MS = 1100;
 const CACHE_KEY = 'geo-membres:nominatim:v1';
+const TIMEOUT_MS = 15000;
 
 export interface ForeignHit {
   lat: number;
@@ -18,7 +20,7 @@ export interface ForeignHit {
 // Cache des réponses : les succès persistent dans le navigateur (réimporter le même fichier
 // ne relance pas les requêtes), les échecs ne valent que pour la session.
 const hits = new Map<string, ForeignHit>();
-const misses = new Set<string>();
+const misses = new Map<string, string>();
 
 try {
   const stored = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}');
@@ -37,21 +39,6 @@ function persist() {
 
 let nextSlotAt = 0;
 
-function wait(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(new Error('Aborted'));
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new Error('Aborted'));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 async function search(params: Record<string, string>, country: CountryRef, signal: AbortSignal): Promise<ForeignHit | null> {
   const query = new URLSearchParams({ format: 'jsonv2', addressdetails: '1', limit: '1', 'accept-language': 'fr', ...params });
   if (country.code) query.set('countrycodes', country.code);
@@ -63,14 +50,8 @@ async function search(params: Record<string, string>, country: CountryRef, signa
   nextSlotAt = slot + MIN_INTERVAL_MS;
   if (slot > now) await wait(slot - now, signal);
 
-  let response: Response;
-  try {
-    response = await fetch(`${ENDPOINT}?${query}`, { signal });
-  } catch (err: any) {
-    if (err.name === 'AbortError' || signal.aborted) throw new Error('Aborted');
-    throw err;
-  }
-  if (!response.ok) throw new Error(`Nominatim ${response.status}`);
+  const response = await fetchWithTimeout(`${ENDPOINT}?${query}`, {}, signal, TIMEOUT_MS);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
   const data = await response.json();
   if (!Array.isArray(data) || data.length === 0) return null;
@@ -95,18 +76,24 @@ export async function geocodeForeign(
   postalCode: string,
   city: string,
   country: CountryRef,
-  signal: AbortSignal
+  signal: AbortSignal,
+  diag: Diag = {}
 ): Promise<ForeignHit | null> {
   const cacheKey = [country.code || country.label.toLowerCase(), postalCode.toUpperCase().replace(/\s+/g, ''), city.toLowerCase().trim()].join('|');
   const cached = hits.get(cacheKey);
+  diag.source = 'Nominatim';
   if (cached) return cached;
-  if (misses.has(cacheKey)) return null;
+  if (misses.has(cacheKey)) {
+    diag.reason = misses.get(cacheKey);
+    return null;
+  }
 
   const attempts: Record<string, string>[] = [];
   if (postalCode && city) attempts.push({ postalcode: postalCode, city });
   if (city) attempts.push({ city });
   if (postalCode) attempts.push({ postalcode: postalCode });
 
+  const errors: string[] = [];
   for (const params of attempts) {
     let hit: ForeignHit | null = null;
     // Une seconde tentative en cas d'erreur réseau ou de refus temporaire
@@ -117,6 +104,7 @@ export async function geocodeForeign(
       } catch (err: any) {
         if (err.message === 'Aborted') throw err;
         console.error('Nominatim error:', err);
+        if (retry === 1) errors.push(describeError(err));
         if (retry === 0) await wait(2000, signal);
       }
     }
@@ -129,6 +117,17 @@ export async function geocodeForeign(
     }
   }
 
-  misses.add(cacheKey);
+  const tried = attempts.map(a => Object.keys(a).map(k => (k === 'postalcode' ? 'CP' : 'ville')).join(' + ')).join(', ');
+  const reason = errors.length > 0
+    ? `Nominatim en erreur : ${errors[errors.length - 1]}`
+    : `Nominatim : introuvable (essayé ${tried || 'rien : CP et ville vides'})`;
+  diag.reason = previousReason(diag, reason);
+  // Une erreur réseau n'est pas mémorisée : un nouvel essai pourra réussir
+  if (errors.length === 0) misses.set(cacheKey, diag.reason);
   return null;
+}
+
+// Garde la raison de Google (quand Google a été tenté avant) devant celle de Nominatim
+function previousReason(diag: Diag, reason: string): string {
+  return diag.reason ? `${diag.reason} ; ${reason}` : reason;
 }
